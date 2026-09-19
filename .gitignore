@@ -1,0 +1,17 @@
+.git/
+.env
+.env.*
+!.env.example
+
+.vscode/
+.idea/
+
+*.log
+*.bak
+*.backup
+
+tmp/
+temp/
+
+.DS_Store
+Thumbs.db

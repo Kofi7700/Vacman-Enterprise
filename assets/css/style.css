@@ -1,0 +1,92 @@
+:root {
+  --primary: #e74a3b;
+  --primary-dark: #c9302c;
+  --secondary: #f6c23e;
+  --success: #1cc88a;
+  --info: #36b9cc;
+  --warning: #f6c23e;
+  --danger: #e74a3b;
+}
+
+body {
+  padding-top: 56px;
+  background-color: #f8f9fc;
+  font-family: 'Segoe UI', sans-serif;
+}
+
+.sidebar {
+  height: 100vh;
+  background: linear-gradient(180deg, var(--primary) 0%, var(--primary-dark) 100%);
+  color: #fff;
+  position: fixed;
+  top: 56px;
+  width: 250px;
+  transition: all 0.3s;
+  overflow-y: auto;
+  box-shadow: 0 0.15rem 1.75rem rgba(58, 59, 69, 0.15);
+  z-index: 900;
+}
+
+.sidebar .nav-link {
+  color: rgba(255, 255, 255, 0.85);
+  margin-bottom: 0.2rem;
+}
+
+.sidebar .nav-link i {
+  width: 1.5rem;
+  display: inline-block;
+}
+
+.sidebar .nav-link:hover,
+.sidebar .nav-link.active {
+  color: #fff;
+  background-color: rgba(255, 255, 255, 0.15);
+  border-radius: 0.35rem;
+}
+
+.topbar {
+  box-shadow: 0 0.15rem 1.75rem rgba(58, 59, 69, 0.15);
+  background-color: #fff !important;
+  border-bottom: 1px solid #ddd;
+}
+
+.main-content {
+  margin-left: 250px;
+  padding: 20px;
+  transition: margin-left 0.3s;
+}
+
+.card-dashboard {
+  border-radius: 0.35rem;
+  box-shadow: 0 0.15rem 1.75rem rgba(58, 59, 69, 0.15);
+}
+
+.border-left-danger { border-left: 0.25rem solid var(--danger); }
+.border-left-primary { border-left: 0.25rem solid #4e73df; }
+.border-left-success { border-left: 0.25rem solid var(--success); }
+.border-left-warning { border-left: 0.25rem solid var(--warning); }
+.border-left-info { border-left: 0.25rem solid var(--info); }
+
+.status-badge {
+  font-size: 0.8em;
+  font-weight: 600;
+}
+
+.product-category {
+  display: inline-block;
+  padding: 0.2em 0.6em;
+  border-radius: 12px;
+  font-size: 0.8em;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.product-category.building { background: #d3d3d3; color: #333; }
+.product-category.electrical { background: #ffeaa7; color: #333; }
+.product-category.appliance { background: #a29bfe; color: #fff; }
+
+@media (max-width: 768px) {
+  .sidebar { left: -250px; position: fixed; z-index: 1000; }
+  .main-content { margin-left: 0; }
+  .sidebar.show { left: 0; }
+}

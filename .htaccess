@@ -1,0 +1,13 @@
+# Custom error pages
+ErrorDocument 404 /errors/404.php
+ErrorDocument 403 /errors/403.php
+ErrorDocument 500 /errors/500.php
+
+# Never allow direct browser access to app internals
+<IfModule mod_alias.c>
+  RedirectMatch 403 ^/config/
+  RedirectMatch 403 ^/includes/
+</IfModule>
+
+# Hide directory listings
+Options -Indexes
