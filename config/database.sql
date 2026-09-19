@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `full_name` varchar(100) NOT NULL,
   `email` varchar(100) DEFAULT NULL,
   `phone` varchar(20) DEFAULT NULL,
+  `photo` varchar(255) DEFAULT NULL,
   `role` enum('admin','warehouse','sales_clerk','manager') NOT NULL DEFAULT 'sales_clerk',
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
@@ -111,6 +112,23 @@ CREATE TABLE IF NOT EXISTS `users` (
   KEY `idx_username` (`username`),
   KEY `idx_role` (`role`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- One-time migration: older installs of this file created `users` without
+-- a `photo` column. Add it in place so an upgrade doesn't need a manual
+-- ALTER TABLE and existing user rows/data are left untouched.
+DELIMITER $$
+CREATE PROCEDURE `_add_users_photo_column`()
+BEGIN
+  DECLARE col_exists INT DEFAULT 0;
+  SELECT COUNT(*) INTO col_exists FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'photo';
+  IF col_exists = 0 THEN
+    ALTER TABLE `users` ADD COLUMN `photo` varchar(255) DEFAULT NULL AFTER `phone`;
+  END IF;
+END$$
+DELIMITER ;
+CALL _add_users_photo_column();
+DROP PROCEDURE `_add_users_photo_column`;
 
 -- Seed users. Passwords below are bcrypt hashes of the demo passwords
 -- shown on the login page. CHANGE THESE after first login in production.

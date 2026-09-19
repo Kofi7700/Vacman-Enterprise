@@ -34,7 +34,7 @@ if (is_post() && isset($_POST['add_product'])) {
                 ':name' => trim($_POST['name']),
                 ':description' => trim($_POST['name']) . ' - ' . trim($_POST['supplier_name'] ?? ''),
                 ':category_id' => (int) $_POST['category_id'],
-                ':barcode' => $_POST['barcode'] !== '' ? trim($_POST['barcode']) : null,
+                ':barcode' => null, // no longer collected on the Add Product form; still editable afterwards
                 ':unit_price' => (float) $_POST['unit_price'],
                 ':cost_price' => (float) $_POST['cost_price'],
                 ':supplier_name' => trim($_POST['supplier_name'] ?? ''),
@@ -146,37 +146,47 @@ if (is_post() && request_method() === 'DELETE') {
 $categories = $pdo->query('SELECT id, name FROM categories ORDER BY name')->fetchAll();
 
 $search = trim($_GET['q'] ?? '');
+$categoryFilter = (int) ($_GET['category_id'] ?? 0);
+
+$sql = "SELECT p.*, c.name AS category_name, COALESCE(SUM(i.quantity), 0) AS total_stock
+        FROM products p
+        JOIN categories c ON p.category_id = c.id
+        LEFT JOIN inventory i ON i.product_id = p.id";
+$conditions = [];
+$params = [];
 if ($search !== '') {
-    $stmt = $pdo->prepare(
-        "SELECT p.*, c.name AS category_name, COALESCE(SUM(i.quantity), 0) AS total_stock
-         FROM products p
-         JOIN categories c ON p.category_id = c.id
-         LEFT JOIN inventory i ON i.product_id = p.id
-         WHERE p.name LIKE :q OR p.sku LIKE :q
-         GROUP BY p.id
-         ORDER BY p.name"
-    );
-    $stmt->execute([':q' => '%' . $search . '%']);
-} else {
-    $stmt = $pdo->query(
-        "SELECT p.*, c.name AS category_name, COALESCE(SUM(i.quantity), 0) AS total_stock
-         FROM products p
-         JOIN categories c ON p.category_id = c.id
-         LEFT JOIN inventory i ON i.product_id = p.id
-         GROUP BY p.id
-         ORDER BY p.name"
-    );
+    $conditions[] = '(p.name LIKE :q OR p.sku LIKE :q)';
+    $params[':q'] = '%' . $search . '%';
 }
+if ($categoryFilter > 0) {
+    $conditions[] = 'p.category_id = :category_id';
+    $params[':category_id'] = $categoryFilter;
+}
+if (!empty($conditions)) {
+    $sql .= ' WHERE ' . implode(' AND ', $conditions);
+}
+$sql .= ' GROUP BY p.id ORDER BY p.name';
+$stmt = $pdo->prepare($sql);
+$stmt->execute($params);
 $products = $stmt->fetchAll();
 
 $pageTitle = 'Product Management';
 require __DIR__ . '/includes/header.php';
 ?>
 
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <form class="d-flex" method="GET" action="products.php" role="search">
-    <input type="search" name="q" class="form-control form-control-sm me-2" style="width: 240px;" placeholder="Search name or SKU" value="<?= old($_GET, 'q') ?>">
-    <button class="btn btn-outline-secondary btn-sm" type="submit"><i class="bi bi-search"></i></button>
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+  <form class="d-flex flex-wrap gap-2" method="GET" action="products.php" role="search">
+    <input type="search" name="q" class="form-control form-control-sm" style="width: 220px;" placeholder="Search name or SKU" value="<?= old($_GET, 'q') ?>">
+    <select name="category_id" class="form-select form-select-sm" style="width: 180px;">
+      <option value="">All Categories</option>
+      <?php foreach ($categories as $cat): ?>
+      <option value="<?= (int) $cat['id'] ?>" <?= $categoryFilter === (int) $cat['id'] ? 'selected' : '' ?>><?= e($cat['name']) ?></option>
+      <?php endforeach; ?>
+    </select>
+    <button class="btn btn-outline-secondary btn-sm" type="submit" title="Search"><i class="bi bi-search"></i></button>
+    <?php if ($search !== '' || $categoryFilter > 0): ?>
+    <a href="products.php" class="btn btn-outline-secondary btn-sm" title="Clear filters"><i class="bi bi-x-lg"></i></a>
+    <?php endif; ?>
   </form>
   <?php if ($canManage): ?>
   <button class="btn btn-danger" data-bs-toggle="modal" data-bs-target="#addProductModal">
@@ -313,7 +323,7 @@ require __DIR__ . '/includes/header.php';
 <div class="modal fade" id="addProductModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog">
     <div class="modal-content">
-      <form method="POST" action="products.php">
+      <form method="POST" action="products.php" id="addProductForm">
         <?= csrf_field() ?>
         <input type="hidden" name="add_product" value="1">
         <div class="modal-header">
@@ -329,18 +339,11 @@ require __DIR__ . '/includes/header.php';
             <label class="form-label">SKU</label>
             <input type="text" class="form-control" name="sku" placeholder="YB-CM-001" required>
           </div>
-          <div class="mb-3">
+          <div class="mb-3 position-relative">
             <label class="form-label">Category</label>
-            <select class="form-select" name="category_id" required>
-              <option value="">Select Category</option>
-              <?php foreach ($categories as $cat): ?>
-              <option value="<?= (int) $cat['id'] ?>"><?= e($cat['name']) ?></option>
-              <?php endforeach; ?>
-            </select>
-          </div>
-          <div class="mb-3">
-            <label class="form-label">Barcode</label>
-            <input type="text" class="form-control" name="barcode">
+            <input type="text" class="form-control" id="addCategorySearch" placeholder="Type to search categories..." autocomplete="off" required>
+            <input type="hidden" name="category_id" id="addCategoryId">
+            <div id="addCategoryResults" class="list-group position-absolute w-100 shadow-sm" style="z-index:1060; max-height:200px; overflow-y:auto; display:none;"></div>
           </div>
           <div class="row">
             <div class="col-md-6 mb-3">
@@ -381,4 +384,79 @@ require __DIR__ . '/includes/header.php';
 </div>
 <?php endif; ?>
 
-<?php require __DIR__ . '/includes/footer.php'; ?>
+<?php
+$extraScripts = '<script>
+  const productCategories = ' . json_encode(array_map(function ($c) {
+        return ['id' => (int) $c['id'], 'name' => $c['name']];
+    }, $categories)) . ';
+
+  function initCategorySearch(searchId, hiddenId, resultsId) {
+    const searchInput = document.getElementById(searchId);
+    const hiddenInput = document.getElementById(hiddenId);
+    const resultsBox = document.getElementById(resultsId);
+    if (!searchInput) return;
+
+    function renderResults(query) {
+      const q = query.trim().toLowerCase();
+      if (!q) { resultsBox.style.display = "none"; resultsBox.innerHTML = ""; return; }
+      const matches = productCategories.filter(function (c) { return c.name.toLowerCase().includes(q); }).slice(0, 8);
+      if (!matches.length) {
+        resultsBox.innerHTML = "<div class=\"list-group-item text-muted small\">No matching categories</div>";
+        resultsBox.style.display = "block";
+        return;
+      }
+      resultsBox.innerHTML = matches.map(function (c) {
+        return "<button type=\"button\" class=\"list-group-item list-group-item-action py-2 cat-search-result\" data-id=\"" + c.id + "\" data-name=\"" + c.name + "\">" + c.name + "</button>";
+      }).join("");
+      resultsBox.style.display = "block";
+      resultsBox.querySelectorAll(".cat-search-result").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          searchInput.value = btn.getAttribute("data-name");
+          hiddenInput.value = btn.getAttribute("data-id");
+          resultsBox.style.display = "none";
+          resultsBox.innerHTML = "";
+        });
+      });
+    }
+
+    searchInput.addEventListener("input", function () {
+      hiddenInput.value = ""; // typing invalidates any prior selection until they pick again
+      renderResults(this.value);
+    });
+    searchInput.addEventListener("focus", function () { this.select(); });
+    searchInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const first = resultsBox.querySelector(".cat-search-result");
+        if (first) first.click();
+      }
+    });
+    document.addEventListener("click", function (e) {
+      if (!searchInput.contains(e.target) && !resultsBox.contains(e.target)) {
+        resultsBox.style.display = "none";
+      }
+    });
+  }
+
+  initCategorySearch("addCategorySearch", "addCategoryId", "addCategoryResults");
+
+  const addProductForm = document.getElementById("addProductForm");
+  if (addProductForm) {
+    addProductForm.addEventListener("submit", function (e) {
+      if (!document.getElementById("addCategoryId").value) {
+        e.preventDefault();
+        alert("Please search for and select a category from the list.");
+      }
+    });
+  }
+
+  const addProductModal = document.getElementById("addProductModal");
+  if (addProductModal) {
+    addProductModal.addEventListener("show.bs.modal", function () {
+      document.getElementById("addCategorySearch").value = "";
+      document.getElementById("addCategoryId").value = "";
+    });
+  }
+</script>';
+require __DIR__ . '/includes/footer.php';
+?>

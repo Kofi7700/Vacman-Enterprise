@@ -115,6 +115,15 @@ if (is_post() && isset($_POST['cancel_purchase'])) {
 $products = $pdo->query('SELECT id, name, sku, supplier_name FROM products ORDER BY name')->fetchAll();
 $stores = $pdo->query('SELECT id, name FROM stores WHERE status = "active" ORDER BY name')->fetchAll();
 $preselectProduct = (int) ($_GET['product_id'] ?? 0);
+$preselectProductLabel = '';
+if ($preselectProduct > 0) {
+    foreach ($products as $p) {
+        if ((int) $p['id'] === $preselectProduct) {
+            $preselectProductLabel = $p['name'] . ' (' . $p['sku'] . ')';
+            break;
+        }
+    }
+}
 
 $purchases = $pdo->query(
     "SELECT pu.*, p.name AS product_name, s.name AS store_name
@@ -191,7 +200,7 @@ require __DIR__ . '/includes/header.php';
 <div class="modal fade" id="addPurchaseModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog">
     <div class="modal-content">
-      <form method="POST" action="purchases.php">
+      <form method="POST" action="purchases.php" id="addPurchaseForm">
         <?= csrf_field() ?>
         <input type="hidden" name="add_purchase" value="1">
         <div class="modal-header">
@@ -199,13 +208,11 @@ require __DIR__ . '/includes/header.php';
           <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
         </div>
         <div class="modal-body">
-          <div class="mb-3">
+          <div class="mb-3 position-relative">
             <label class="form-label">Product</label>
-            <select class="form-select" name="product_id" required>
-              <?php foreach ($products as $p): ?>
-              <option value="<?= (int) $p['id'] ?>" <?= $preselectProduct === (int) $p['id'] ? 'selected' : '' ?>><?= e($p['name']) ?> (<?= e($p['sku']) ?>)</option>
-              <?php endforeach; ?>
-            </select>
+            <input type="text" class="form-control" id="purchaseProductSearch" placeholder="Type a product name or SKU..." autocomplete="off" value="<?= e($preselectProductLabel) ?>" required>
+            <input type="hidden" name="product_id" id="purchaseProductId" value="<?= $preselectProduct ?: '' ?>">
+            <div id="purchaseProductResults" class="list-group position-absolute w-100 shadow-sm" style="z-index:1060; max-height:240px; overflow-y:auto; display:none;"></div>
           </div>
           <div class="mb-3">
             <label class="form-label">Deliver To Store</label>
@@ -258,7 +265,72 @@ require __DIR__ . '/includes/header.php';
 </div>
 
 <?php
+$extraScripts = '<script>
+  const purchaseProducts = ' . json_encode(array_map(function ($p) {
+        return ['id' => (int) $p['id'], 'name' => $p['name'], 'sku' => $p['sku']];
+    }, $products)) . ';
+  const purchaseProductSearch = document.getElementById("purchaseProductSearch");
+  const purchaseProductId = document.getElementById("purchaseProductId");
+  const purchaseProductResults = document.getElementById("purchaseProductResults");
+
+  function renderPurchaseResults(query) {
+    const q = query.trim().toLowerCase();
+    if (!q) { purchaseProductResults.style.display = "none"; purchaseProductResults.innerHTML = ""; return; }
+    const matches = purchaseProducts.filter(function (p) {
+      return p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q);
+    }).slice(0, 8);
+    if (!matches.length) {
+      purchaseProductResults.innerHTML = "<div class=\"list-group-item text-muted small\">No matching products</div>";
+      purchaseProductResults.style.display = "block";
+      return;
+    }
+    purchaseProductResults.innerHTML = matches.map(function (p) {
+      return "<button type=\"button\" class=\"list-group-item list-group-item-action py-2 purchase-search-result\" data-id=\"" + p.id + "\" data-label=\"" + p.name + " (" + p.sku + ")\">" + p.name + " <span class=\"text-muted small\">(" + p.sku + ")</span></button>";
+    }).join("");
+    purchaseProductResults.style.display = "block";
+    purchaseProductResults.querySelectorAll(".purchase-search-result").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        purchaseProductSearch.value = btn.getAttribute("data-label");
+        purchaseProductId.value = btn.getAttribute("data-id");
+        purchaseProductResults.style.display = "none";
+        purchaseProductResults.innerHTML = "";
+      });
+    });
+  }
+
+  if (purchaseProductSearch) {
+    purchaseProductSearch.addEventListener("input", function () {
+      purchaseProductId.value = "";
+      renderPurchaseResults(this.value);
+    });
+    purchaseProductSearch.addEventListener("focus", function () { this.select(); });
+    purchaseProductSearch.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const first = purchaseProductResults.querySelector(".purchase-search-result");
+        if (first) first.click();
+      }
+    });
+    document.addEventListener("click", function (e) {
+      if (!purchaseProductSearch.contains(e.target) && !purchaseProductResults.contains(e.target)) {
+        purchaseProductResults.style.display = "none";
+      }
+    });
+  }
+
+  const addPurchaseForm = document.getElementById("addPurchaseForm");
+  if (addPurchaseForm) {
+    addPurchaseForm.addEventListener("submit", function (e) {
+      if (!purchaseProductId.value) {
+        e.preventDefault();
+        alert("Please search for and select a product from the list.");
+      }
+    });
+  }';
+
 if ($preselectProduct > 0) {
-    $extraScripts = '<script>document.addEventListener("DOMContentLoaded",function(){new bootstrap.Modal(document.getElementById("addPurchaseModal")).show();});</script>';
+    $extraScripts .= 'document.addEventListener("DOMContentLoaded",function(){new bootstrap.Modal(document.getElementById("addPurchaseModal")).show();});';
 }
+$extraScripts .= '</script>';
 require __DIR__ . '/includes/footer.php';
+?>

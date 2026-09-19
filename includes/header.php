@@ -41,7 +41,11 @@ function nav_active(string $file, string $current): string
         <li class="nav-item dropdown no-arrow">
           <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button" data-bs-toggle="dropdown">
             <span class="me-2 d-none d-lg-inline text-gray-600 small"><?= e($user['full_name'] ?? '') ?></span>
+            <?php if (!empty($user['photo'])): ?>
+            <img class="rounded-circle" src="<?= e($user['photo']) ?>" height="30" width="30" style="object-fit: cover;" alt="Profile">
+            <?php else: ?>
             <img class="rounded-circle" src="https://ui-avatars.com/api/?name=<?= urlencode($user['full_name'] ?? 'User') ?>&background=e74a3b&color=fff" height="30" width="30" alt="Profile">
+            <?php endif; ?>
           </a>
           <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="userDropdown">
             <li><span class="dropdown-item-text small text-muted text-uppercase"><?= e($user['role'] ?? '') ?></span></li>

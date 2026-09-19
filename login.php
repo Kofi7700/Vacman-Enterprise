@@ -17,7 +17,7 @@ if (is_post()) {
     if ($inputUsername === '' || $inputPassword === '') {
         $error = 'Please enter both username and password.';
     } else {
-        $stmt = db()->prepare('SELECT id, username, full_name, role, password FROM users WHERE username = ?');
+        $stmt = db()->prepare('SELECT id, username, full_name, role, photo, password FROM users WHERE username = ?');
         $stmt->execute([$inputUsername]);
         $user = $stmt->fetch();
 
@@ -29,6 +29,7 @@ if (is_post()) {
                 'username' => $user['username'],
                 'full_name' => $user['full_name'],
                 'role' => $user['role'],
+                'photo' => $user['photo'],
             ];
 
             log_audit('login', 'user', (int) $user['id']);

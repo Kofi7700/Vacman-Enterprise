@@ -226,7 +226,7 @@ require __DIR__ . '/includes/header.php';
 <div class="modal fade" id="addTransferModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog">
     <div class="modal-content">
-      <form method="POST" action="transfers.php">
+      <form method="POST" action="transfers.php" id="addTransferForm">
         <?= csrf_field() ?>
         <input type="hidden" name="add_transfer" value="1">
         <div class="modal-header">
@@ -234,13 +234,11 @@ require __DIR__ . '/includes/header.php';
           <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
         </div>
         <div class="modal-body">
-          <div class="mb-3">
+          <div class="mb-3 position-relative">
             <label class="form-label">Product</label>
-            <select class="form-select" name="product_id" required>
-              <?php foreach ($products as $p): ?>
-              <option value="<?= (int) $p['id'] ?>"><?= e($p['name']) ?> (<?= e($p['sku']) ?>)</option>
-              <?php endforeach; ?>
-            </select>
+            <input type="text" class="form-control" id="transferProductSearch" placeholder="Type a product name or SKU..." autocomplete="off" required>
+            <input type="hidden" name="product_id" id="transferProductId">
+            <div id="transferProductResults" class="list-group position-absolute w-100 shadow-sm" style="z-index:1060; max-height:240px; overflow-y:auto; display:none;"></div>
           </div>
           <div class="mb-3">
             <label class="form-label">From Store</label>
@@ -277,4 +275,68 @@ require __DIR__ . '/includes/header.php';
 </div>
 <?php endif; ?>
 
-<?php require __DIR__ . '/includes/footer.php'; ?>
+<?php
+$extraScripts = '<script>
+  const transferProducts = ' . json_encode(array_map(function ($p) {
+        return ['id' => (int) $p['id'], 'name' => $p['name'], 'sku' => $p['sku']];
+    }, $products)) . ';
+  const transferProductSearch = document.getElementById("transferProductSearch");
+  const transferProductId = document.getElementById("transferProductId");
+  const transferProductResults = document.getElementById("transferProductResults");
+
+  function renderTransferResults(query) {
+    const q = query.trim().toLowerCase();
+    if (!q) { transferProductResults.style.display = "none"; transferProductResults.innerHTML = ""; return; }
+    const matches = transferProducts.filter(function (p) {
+      return p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q);
+    }).slice(0, 8);
+    if (!matches.length) {
+      transferProductResults.innerHTML = "<div class=\"list-group-item text-muted small\">No matching products</div>";
+      transferProductResults.style.display = "block";
+      return;
+    }
+    transferProductResults.innerHTML = matches.map(function (p) {
+      return "<button type=\"button\" class=\"list-group-item list-group-item-action py-2 transfer-search-result\" data-id=\"" + p.id + "\" data-label=\"" + p.name + " (" + p.sku + ")\">" + p.name + " <span class=\"text-muted small\">(" + p.sku + ")</span></button>";
+    }).join("");
+    transferProductResults.style.display = "block";
+    transferProductResults.querySelectorAll(".transfer-search-result").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        transferProductSearch.value = btn.getAttribute("data-label");
+        transferProductId.value = btn.getAttribute("data-id");
+        transferProductResults.style.display = "none";
+        transferProductResults.innerHTML = "";
+      });
+    });
+  }
+
+  if (transferProductSearch) {
+    transferProductSearch.addEventListener("input", function () {
+      transferProductId.value = "";
+      renderTransferResults(this.value);
+    });
+    transferProductSearch.addEventListener("focus", function () { this.select(); });
+    transferProductSearch.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const first = transferProductResults.querySelector(".transfer-search-result");
+        if (first) first.click();
+      }
+    });
+    document.addEventListener("click", function (e) {
+      if (!transferProductSearch.contains(e.target) && !transferProductResults.contains(e.target)) {
+        transferProductResults.style.display = "none";
+      }
+    });
+  }
+
+  const addTransferForm = document.getElementById("addTransferForm");
+  if (addTransferForm) {
+    addTransferForm.addEventListener("submit", function (e) {
+      if (!transferProductId.value) {
+        e.preventDefault();
+        alert("Please search for and select a product from the list.");
+      }
+    });
+  }
+</script>';
+require __DIR__ . '/includes/footer.php'; ?>
