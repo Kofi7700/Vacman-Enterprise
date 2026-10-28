@@ -19,7 +19,9 @@ define('APP_DEBUG', $appDebugEnv !== false ? filter_var($appDebugEnv, FILTER_VAL
 error_reporting(E_ALL);
 ini_set('display_errors', APP_DEBUG ? '1' : '0');
 ini_set('log_errors', '1');
-date_default_timezone_set('Africa/Accra');
+// Use the workstation's local timezone. This matches the browser/device
+// time used by staff when attendance is marked.
+date_default_timezone_set('America/Los_Angeles');
 
 // ---- Branding ----------------------------------------------------------
 // One place to change the software name vs. the business running it.

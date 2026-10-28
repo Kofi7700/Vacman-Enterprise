@@ -19,6 +19,13 @@ function db(): PDO
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             PDO::ATTR_EMULATE_PREPARES => false,
         ]);
+        // Keep MySQL NOW(), CURDATE(), and timestamp comparisons aligned
+        // with PHP's configured local timezone, including daylight saving.
+        $offsetSeconds = (new DateTimeImmutable('now'))->getOffset();
+        $offsetSign = $offsetSeconds < 0 ? '-' : '+';
+        $offsetSeconds = abs($offsetSeconds);
+        $mysqlOffset = sprintf('%s%02d:%02d', $offsetSign, intdiv($offsetSeconds, 3600), intdiv($offsetSeconds % 3600, 60));
+        $pdo->exec('SET time_zone = ' . $pdo->quote($mysqlOffset));
         return $pdo;
     } catch (PDOException $e) {
         error_log('Database connection failed: ' . $e->getMessage());

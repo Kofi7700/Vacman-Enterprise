@@ -1,184 +1,143 @@
-# Vacman Enterprise — Inventory System (Yellowman Ventures)
+# Vacman Enterprise
 
-This is a from-scratch PHP + MySQL rebuild of the uploaded prototype. The
-original zip contained static HTML pages with hard-coded JavaScript mock
-data (no real PHP anywhere, despite a couple of files having "`.php`"
-comments and even literal PHP code pasted inside `.html` files with a
-stray ` ```php ` markdown fence at the top of `products.html`). None of it
-talked to the database in `vacman_enterprise_system.sql`. This rebuild is
-a real, working application, server-rendered classic PHP, built for
-**XAMPP on localhost**.
+Vacman Enterprise is a server-rendered inventory and sales management system for **Yellowman Ventures**. It is built with PHP, MySQL, Bootstrap, and Chart.js, and is designed to run locally with XAMPP or in a Docker-based deployment.
 
-## 1. Setup (XAMPP)
+## Features
 
-1. Copy the whole `vacman/` folder into `C:\xampp\htdocs\` (Windows) or
-   `/Applications/XAMPP/htdocs/` (Mac) or `/opt/lampp/htdocs/` (Linux),
-   so the app lives at `htdocs/vacman/`.
-2. Start Apache and MySQL in the XAMPP control panel.
-3. Open phpMyAdmin (`http://localhost/phpmyadmin`), create nothing
-   manually — just go to the **Import** tab and import
-   `vacman/config/database.sql`. It creates the database
-   (`vacman_enterprise_system`), all tables, and seed data.
-4. Visit `http://localhost/vacman/` in your browser.
-5. Log in with one of the demo accounts below, then **change the
-   passwords** from the Profile page (or Admin → User Management).
+- Dashboard with bar-and-pie inventory-mix charts, sales, stock, activity, and role-scoped daily machine-fee summaries
+- Product catalog with automatic product codes, category assignment, per-store stock editing, store grouping, and product/category/store filtering
+- Store-grouped inventory tracking with physical-count adjustments and role-based store visibility
+- Multi-item sales checkout with VAT, discount and payment balance calculations, printable receipts, and audited receipt corrections for managers and administrators
+- Store-grouped transaction history showing the latest five transactions per store each day
+- Administrator-only sale deletion with automatic inventory restoration and audit logging
+- Multi-service fee registration for Sawing, Planning, Design, Shooting, and Facial Board, with printable receipts for administrators, managers, and cashiers
+- Customer deposit orders with item lists, instalment payments, and inventory deduction only when items are collected
+- Attendance for all active team members except administrators and managers, including system users and non-login staff
+- Purchase-order creation, cancellation, and stock receiving
+- Inter-store transfer workflow
+- Store and user management with required operating-store assignments and a searchable administrator audit trail showing 20 events per page
+- Sales, inventory, and low-stock reports with CSV export
+- Multi-role access control allowing each account to combine administrator, manager, mini-manager, cashier, warehouse, and sales-clerk permissions
+- CSRF protection, prepared SQL statements, password hashing, and audit logging
+- Responsive navigation with a menu button that toggles the sidebar on desktop and mobile
 
-If your MySQL root user has a password, or you renamed the folder to
-something other than `vacman`, update `config/config.php` (`DB_PASS`)
-and `.htaccess` (the `/vacman/` paths) to match.
+## Requirements
 
-`.htaccess` only takes effect if Apache's `AllowOverride` is set to
-`All` for `htdocs` (XAMPP's default `httpd.conf` usually already has
-this). If the custom error pages don't seem to apply, that setting is
-the first thing to check — the app still works fine either way, since
-PHP-level errors (403/404/500) are rendered directly by the pages
-themselves regardless of `.htaccess`.
+- PHP 8.2 or later with PDO MySQL enabled
+- MySQL or MariaDB
+- Apache with `mod_rewrite` and `.htaccess` overrides enabled
+- A modern web browser
 
-### Demo logins
+The standard XAMPP installation includes the required local services and PHP extensions.
 
-| Username     | Password       | Role         |
-|--------------|----------------|--------------|
-| `admin`      | `Admin@123`    | admin        |
-| `manager1`   | `Manager@123`  | manager      |
-| `warehouse1` | `Warehouse@123`| warehouse    |
-| `clerk1`     | `Clerk@123`    | sales_clerk  |
+## Local setup with XAMPP
 
-## 2. What was actually wrong with the upload
+1. Place this repository at `C:\xampp\htdocs\vacman` on Windows. Typical alternatives are `/Applications/XAMPP/htdocs/vacman` on macOS and `/opt/lampp/htdocs/vacman` on Linux.
+2. Start Apache and MySQL from the XAMPP control panel.
+3. Open [phpMyAdmin](http://localhost/phpmyadmin), select **Import**, and import `config/database.sql`.
+4. Visit [http://localhost/vacman/](http://localhost/vacman/).
+5. Sign in with a demo account and change its password from the Profile page.
 
-- **No PHP ran anything.** Every page was static HTML with JS arrays
-  (`sampleData`) standing in for a database. `admin.html`, `dashboard.html`,
-  `sales.html`, `stores.html`, `transfers.html`, `reports.html`, and
-  `inventoryms.html` had zero server code.
-- `login.html` and `products.html` *did* contain real PHP — but saved
-  with a `.html` extension, so a stock Apache/XAMPP setup would serve it
-  as plain text/download it instead of executing it. `products.html`
-  also literally starts with a stray ` ```php ` line pasted in by mistake,
-  which alone would break the page.
-- Both files pointed at a **different database name**
-  (`yellowman_inventory`) than the one in the SQL dump you provided
-  (`vacman_enterprise_system`).
-- `products.html` deleted rows via a plain `GET` link
-  (`?delete=<id>`) with **no CSRF protection and no login/role check on
-  the delete branch** — anyone who guessed the URL, or was tricked into
-  clicking a link, could delete a product while logged in as any user.
-- `login.html` redirected to pages that don't exist
-  (`warehouse_dashboard.php`, `sales_dashboard.php`, `manager_dashboard.php`).
-- `profile.html` and `logout.html` were empty (0 bytes).
-- `dashboard.html`'s embedded Chart.js config was invalid JavaScript —
-  missing `data:` keys on the labels/values, and colors written as
-  `var(--primary)` inside a plain `.js` array literal (`var()` is CSS
-  syntax; it does nothing there and Chart.js would render blank/broken
-  bars).
-- Branding was inconsistent: "Yellowman Inventory" vs "InventoryMS" vs
-  the zip/database's "Vacman Enterprise" name; "Accra, Ghana" hard-coded
-  in the login/dashboard footers while the one store actually in the
-  database is in Sogakope.
+The SQL import creates the `vacman_enterprise_system` database, its tables, and sample data. You do not need to create the database first.
 
-## 3. What this rebuild does, mapped to your 6 points
+### Demo accounts
 
-1. **Real PHP application**, not a patch of the mocks — every page is
-   server-rendered PHP that reads/writes MySQL directly via PDO.
-2. **Renamed and connected.** Every file is `.php`, uses one shared
-   `config/config.php` for session/DB/auth setup, and `includes/header.php`
-   + `includes/footer.php` for one consistent layout and navigation
-   across all pages. `config/database.sql` matches the real DB name used
-   everywhere in the code.
-3. **JavaScript fixed.** The dashboard and sales charts are rebuilt with
-   valid Chart.js config (proper `data:` keys, literal hex colors instead
-   of `var(--x)` inside JS). Every link goes to a page that exists.
-4. **No more mock data.** Sales, stores, transfers, purchases, inventory
-   counts, and reports are 100% database-backed. Recording a sale locks
-   the inventory row (`SELECT ... FOR UPDATE`) and decrements real stock
-   in a transaction; completing a transfer moves real stock between two
-   real store rows; marking a purchase "delivered" adds real stock.
-5. **Security/authorization:**
-   - Every page calls `require_login()` or `require_role(...)`.
-   - Every state-changing form carries a CSRF token, verified with
-     `verify_csrf()` before touching the database.
-   - Deletes go through `POST` with a `_method=DELETE` override field —
-     never a bare `GET` link — and are restricted to `admin`.
-   - Server-side `validate()` checks required/numeric/positive fields on
-     every form before it reaches SQL; all queries are parameterized
-     (PDO prepared statements) — no string-built SQL anywhere.
-   - `errors/403.php`, `404.php`, `500.php` are generic, safe pages.
-     Uncaught exceptions and fatal errors are logged server-side and show
-     the 500 page instead of a raw stack trace or SQL error
-     (`APP_DEBUG` in `config/config.php` controls this — leave it `false`
-     once you're done testing).
-6. **Standardized branding/currency/layout:** `APP_NAME` ("Vacman
-   Enterprise") and `BUSINESS_NAME` ("Yellowman Ventures") are single
-   constants in `config/config.php`, used everywhere. All money goes
-   through one `money()` helper (`GHS ₵`, two decimals). Layout, sidebar,
-   and navbar live in `includes/header.php`/`footer.php` and
-   `assets/css/style.css` — one theme, not four different ones.
+| Username | Password | Role |
+| --- | --- | --- |
+| `admin` | `Admin@123` | Administrator |
+| `manager1` | `Manager@123` | Manager |
+| `minimanager1` | `MiniManager@123` | Mini manager (Store 2) |
+| `cashier1` | `Cashier@123` | Cashier |
+| `warehouse1` | `Warehouse@123` | Warehouse |
+| `clerk1` | `Clerk@123` | Sales clerk |
 
-## 4. Pages
+> The demo passwords are public and must be changed before the application is exposed to other users.
 
-| File | Purpose | Access |
-|---|---|---|
-| `login.php` / `logout.php` | Auth | Everyone / logged in |
-| `dashboard.php` | KPIs, low-stock alerts, recent activity, charts | Logged in |
-| `products.php` | Product catalog CRUD | View: everyone. Add/Edit: admin, warehouse. Delete: admin |
-| `inventory.php` | Per-store stock levels + physical count adjustment | View: everyone. Adjust: admin, warehouse |
-| `sales.php` | Point-of-sale style sale recording, one or multiple products per checkout | View: everyone. Record: admin, manager, sales_clerk |
-| `purchases.php` | Purchase orders + receiving stock | admin, manager, warehouse |
-| `transfers.php` | Inter-store transfer request → approve → in transit → completed | Request: admin/manager/warehouse. Approve: admin/manager. Fulfill: admin/warehouse |
-| `stores.php` | Store CRUD | admin, manager (delete: admin) |
-| `reports.php` | Sales summary, top products, low stock, inventory valuation, CSV export | Logged in |
-| `admin.php` | User management, audit log feed | admin only |
-| `profile.php` | Edit own details / change password | Logged in |
+## Configuration
 
-## 5. Two intentional design calls worth knowing about
+Application settings live in `config/config.php`. Database settings can be supplied as environment variables; when they are absent, the application uses the local XAMPP defaults shown below.
 
-- **`inventoryms.html` and `admin.html`'s dashboard-style content were
-  not ported as a separate page.** They were near-duplicates of
-  `dashboard.html` under a different color theme/name ("InventoryMS" in
-  blue vs "Yellowman" in red). Keeping both would have re-introduced the
-  branding inconsistency point 6 asked to fix, so their useful ideas
-  (stat cards, category chart) were folded into the one `dashboard.php`.
-- **No "delete user" button in `admin.php`.** The schema has
-  `sales.user_id` as `ON DELETE CASCADE` — deleting a user would silently
-  delete every sale they ever recorded. Rather than quietly changing your
-  schema's delete behavior, `admin.php` only supports editing a user's
-  details/role/password. If you want hard-delete, decide first whether
-  `sales.user_id` should become `ON DELETE SET NULL` (keeps the sale,
-  loses who recorded it) instead.
+| Variable | Local default | Description |
+| --- | --- | --- |
+| `DB_HOST` | `localhost` | MySQL host, optionally including a port |
+| `DB_NAME` | `vacman_enterprise_system` | Database name |
+| `DB_USER` | `root` | Database user |
+| `DB_PASS` | Empty | Database password |
+| `APP_DEBUG` | `true` | Displays PHP errors during local development |
 
-## 6. Not built (flag if you need them)
+Set `APP_DEBUG=false` in production. Errors are still written to the PHP error log.
 
-- Email/SMS notifications (the `notifications` table exists in the
-  schema but no UI consumes it yet).
-- Multi-currency support (currency is a fixed constant, GHS ₵).
-- Pagination on long tables (sales/products lists cap at 100 rows via
-  `LIMIT` for now).
+If Apache ignores `.htaccess`, confirm that `AllowOverride All` is enabled for the document root. When the app is hosted below the web root (for example, at `/vacman/`), prefix the `RedirectMatch` and `ErrorDocument` paths in `.htaccess` with `/vacman` so the protected directories and custom error pages resolve correctly.
 
-## 7. Deploying to Render
+## Roles and access
 
-Render has no native PHP runtime and no managed MySQL, so this repo
-includes a `Dockerfile` and expects the database to run as a separate
-service. Push the contents of this folder to the root of a GitHub repo
-(not nested in a `vacman/` subfolder), then:
+| Area | Access |
+| --- | --- |
+| Dashboard and reports | All signed-in users |
+| Products | Administrators, managers, and warehouse staff can view all stores; other users see only their assigned store. Administrators and warehouse staff can add or edit; only administrators can delete |
+| Inventory | Administrators, managers, and warehouse staff can view all stores; other users see only their assigned store. Administrators and warehouse staff can adjust stock |
+| Sales | Administrators and managers can view all stores; other users see only their assigned store. Administrators, managers, mini managers, and sales clerks can record sales; store-assigned users can act only within their store. Only administrators can delete sales |
+| Machine fees | Administrators and managers can register and view payments across all stores; cashiers can register and view payments only for their assigned store. Only administrators can delete payments |
+| Deposits | Customer item orders can be partly or fully paid without changing inventory. Stock is validated and deducted only when the customer collects the order; store-assigned users are restricted to their store |
+| Attendance | Includes mini managers, cashiers, warehouse users, sales clerks, and non-login staff. Administrators and managers mark across stores; mini managers mark only their assigned store |
+| Purchases | Administrators, managers, mini managers, and warehouse staff; mini managers are restricted to their assigned store |
+| Transfers | Administrators, managers, mini managers, and warehouse staff; mini managers can request from and approve arrivals for their assigned store |
+| Stores | Administrators and managers; only administrators can delete |
+| User administration and audit trail | Administrators only; the audit trail shows the newest 20 events per page |
+| Profile | All signed-in users |
 
-1. **Database** — deploy [render-examples/mysql](https://github.com/render-examples/mysql)
-   as a Render **Private Service** (Docker, paid plan — private
-   services and disks aren't on the free tier) with a disk mounted at
-   `/var/lib/mysql`, and set `MYSQL_DATABASE` / `MYSQL_USER` /
-   `MYSQL_PASSWORD` / `MYSQL_ROOT_PASSWORD`. Import `config/database.sql`
-   into it (e.g. via an [Adminer](https://render.com/docs/deploy-adminer)
-   web service or `mysql ... < config/database.sql` over SSH).
-2. **App** — create a Render **Web Service** from this repo with the
-   **Docker** runtime and **Port** set to `10000`. Add these environment
-   variables (`config/config.php` reads them automatically, falling
-   back to XAMPP defaults locally):
+Accounts may hold more than one role. Permissions are combined: if any assigned role grants an action, the account can perform it. A store assignment is required whenever an account includes mini-manager, cashier, warehouse, or sales-clerk responsibilities.
 
-   | Key | Value |
-   | --- | --- |
-   | `DB_HOST` | the MySQL private service's internal address, e.g. `mysql-foo:3306` |
-   | `DB_NAME` | value of `MYSQL_DATABASE` above |
-   | `DB_USER` | value of `MYSQL_USER` above |
-   | `DB_PASS` | value of `MYSQL_PASSWORD` above |
-   | `APP_DEBUG` | `false` |
+## Project structure
 
-3. Deploy. Render builds the Docker image and serves the app on a
-   `*.onrender.com` URL (with free managed TLS), or on a custom domain
-   you attach under the service's Settings.
+```text
+vacman/
+|-- assets/              # CSS, JavaScript, images, and user uploads
+|-- config/
+|   |-- config.php       # Application and database configuration
+|   `-- database.sql     # Schema and seed data
+|-- errors/              # Custom HTTP error pages
+|-- includes/            # Authentication, database, CSRF, layout, and helpers
+|-- admin.php            # User administration and audit log
+|-- dashboard.php        # KPIs, alerts, charts, and recent activity
+|-- inventory.php        # Per-store stock and physical counts
+|-- machine_fees.php     # Machine fee registration and history
+|-- machine_fee_receipt.php # Printable machine fee receipt
+|-- deposits.php         # Customer deposit orders and collection
+|-- deposit_receipt.php  # Printable partial/full deposit receipt
+|-- attendance.php       # Staff clock-in/out and attendance register
+|-- products.php         # Store-grouped product catalog
+|-- purchases.php        # Purchase orders and receiving
+|-- receipt.php          # Store-protected printable sale receipt
+|-- reports.php          # Operational reports and CSV export
+|-- sales.php            # Checkout and store-grouped sales history
+|-- stores.php           # Store management
+`-- transfers.php        # Inter-store transfers
+```
+
+## Docker and Render deployment
+
+The included `Dockerfile` runs PHP 8.2 with Apache on port `10000`. The database must run as a separate MySQL service.
+
+1. Push this directory as the root of a Git repository.
+2. Provision a MySQL instance and import `config/database.sql`.
+3. Create a Render Web Service using the repository's Dockerfile.
+4. Configure `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASS`, and `APP_DEBUG=false`.
+5. Deploy the service. The container exposes port `10000`.
+
+Render does not provide a native PHP runtime or managed MySQL. PHP runs through Docker, and MySQL can be deployed as a private service with persistent storage. See Render's [Docker](https://render.com/docs/docker) and [MySQL](https://render.com/docs/deploy-mysql) documentation for current platform instructions.
+
+## Security notes
+
+- All application pages require authentication or an explicit role.
+- State-changing requests use CSRF tokens.
+- SQL queries use PDO prepared statements.
+- Sales and stock movements use database transactions and row locking.
+- Destructive actions use CSRF-protected `POST` requests rather than query-string actions.
+- Production deployments should use HTTPS, unique database credentials, changed demo passwords, and `APP_DEBUG=false`.
+
+## Current limitations
+
+- The notifications table has no email, SMS, or in-app notification interface.
+- Currency is fixed to Ghanaian cedi (`GHS`).
+- Sales history is capped at 100 records and displays at most five transactions per store per day; purchase and transfer lists are also capped rather than paginated.

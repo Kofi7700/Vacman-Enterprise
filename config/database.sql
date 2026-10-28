@@ -16,6 +16,8 @@
 -- Demo logins created below (change these after first login):
 --   admin      / Admin@123     (role: admin)
 --   manager1   / Manager@123   (role: manager)
+--   minimanager1 / MiniManager@123 (role: mini_manager)
+--   cashier1   / Cashier@123   (role: cashier)
 --   warehouse1 / Warehouse@123 (role: warehouse)
 --   clerk1     / Clerk@123     (role: sales_clerk)
 -- =====================================================================
@@ -104,13 +106,18 @@ CREATE TABLE IF NOT EXISTS `users` (
   `email` varchar(100) DEFAULT NULL,
   `phone` varchar(20) DEFAULT NULL,
   `photo` varchar(255) DEFAULT NULL,
-  `role` enum('admin','warehouse','sales_clerk','manager') NOT NULL DEFAULT 'sales_clerk',
+  `role` enum('admin','manager','mini_manager','cashier','warehouse','sales_clerk','staff') NOT NULL DEFAULT 'sales_clerk',
+  `roles` varchar(255) DEFAULT NULL,
+  `store_id` int(11) DEFAULT NULL,
+  `status` enum('active','frozen') NOT NULL DEFAULT 'active',
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
   PRIMARY KEY (`id`),
   UNIQUE KEY `username` (`username`),
   KEY `idx_username` (`username`),
-  KEY `idx_role` (`role`)
+  KEY `idx_role` (`role`),
+  KEY `store_id` (`store_id`),
+  KEY `idx_user_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- One-time migration: older installs of this file created `users` without
@@ -130,18 +137,73 @@ DELIMITER ;
 CALL _add_users_photo_column();
 DROP PROCEDURE `_add_users_photo_column`;
 
+-- Add account status to existing installations without changing current users.
+DELIMITER $$
+CREATE PROCEDURE `_add_users_status_column`()
+BEGIN
+  DECLARE col_exists INT DEFAULT 0;
+  SELECT COUNT(*) INTO col_exists FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'status';
+  IF col_exists = 0 THEN
+    ALTER TABLE `users`
+      ADD COLUMN `status` enum('active','frozen') NOT NULL DEFAULT 'active' AFTER `role`,
+      ADD KEY `idx_user_status` (`status`);
+  END IF;
+END$$
+DELIMITER ;
+CALL _add_users_status_column();
+DROP PROCEDURE `_add_users_status_column`;
+
+-- Add the cashier role to existing installations.
+ALTER TABLE `users` MODIFY COLUMN `role`
+  enum('admin','manager','mini_manager','cashier','warehouse','sales_clerk','staff') NOT NULL DEFAULT 'sales_clerk';
+
+-- Store every assigned role as a comma-separated set while retaining
+-- `role` as the primary/legacy role for compatibility with older installs.
+DELIMITER $$
+CREATE PROCEDURE `_add_users_roles_column`()
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'roles') THEN
+    ALTER TABLE `users` ADD COLUMN `roles` varchar(255) DEFAULT NULL AFTER `role`;
+  END IF;
+  UPDATE `users` SET `roles` = `role` WHERE `roles` IS NULL OR `roles` = '';
+END$$
+DELIMITER ;
+CALL _add_users_roles_column();
+DROP PROCEDURE `_add_users_roles_column`;
+
+-- Assign operational users to a store. Existing non-management users are
+-- assigned to the first active store and can be corrected in User Management.
+DELIMITER $$
+CREATE PROCEDURE `_add_users_store_column`()
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'store_id') THEN
+    ALTER TABLE `users` ADD COLUMN `store_id` int(11) DEFAULT NULL AFTER `role`, ADD KEY `store_id` (`store_id`);
+    UPDATE `users`
+      SET `store_id` = (SELECT `id` FROM `stores` WHERE `status` = 'active' ORDER BY `id` LIMIT 1)
+      WHERE `role` IN ('mini_manager','cashier','warehouse','sales_clerk');
+  END IF;
+END$$
+DELIMITER ;
+CALL _add_users_store_column();
+DROP PROCEDURE `_add_users_store_column`;
+
 -- Seed users. Passwords below are bcrypt hashes of the demo passwords
 -- shown on the login page. CHANGE THESE after first login in production.
 --   admin      / Admin@123     (role: admin)
 --   manager1   / Manager@123   (role: manager)
+--   minimanager1 / MiniManager@123 (role: mini_manager)
+--   cashier1   / Cashier@123   (role: cashier)
 --   warehouse1 / Warehouse@123 (role: warehouse)
 --   clerk1     / Clerk@123     (role: sales_clerk)
-INSERT INTO `users` (`id`, `username`, `password`, `full_name`, `email`, `phone`, `role`) VALUES
-(1, 'admin', '$2y$10$Ho0DwqZTd28N9.wW7UN8QeZwRlus3rHR76R8ZgWMT2Ie17d3zlRZC', 'System Administrator', 'admin@yellowman.com.gh', '+233 246526228', 'admin'),
-(2, 'manager1', '$2y$10$Ztlsk2egTzioVxXvEqkLWOBLepYGYFKMWMpWqHrmDdA1Uoy0AYvSu', 'Kwame Mensah', 'manager1@yellowman.com.gh', '+233 246000001', 'manager'),
-(3, 'warehouse1', '$2y$10$sXkNFV5eVKpwZLXhlqCtDug.XqoRHdU0sTSsPWaWVGs40YmIfPXIy', 'Ama Boateng', 'warehouse1@yellowman.com.gh', '+233 246000002', 'warehouse'),
-(4, 'clerk1', '$2y$10$5O/fqle5B0wJ7g/PMIxb7upmFnlMKiARH34aGMZ.jjDsDsk7a8JPK', 'Yaw Owusu', 'clerk1@yellowman.com.gh', '+233 246000003', 'sales_clerk')
-ON DUPLICATE KEY UPDATE full_name = VALUES(full_name);
+INSERT INTO `users` (`id`, `username`, `password`, `full_name`, `email`, `phone`, `role`, `roles`, `store_id`) VALUES
+(1, 'admin', '$2y$10$Ho0DwqZTd28N9.wW7UN8QeZwRlus3rHR76R8ZgWMT2Ie17d3zlRZC', 'System Administrator', 'admin@yellowman.com.gh', '+233 246526228', 'admin', 'admin', NULL),
+(2, 'manager1', '$2y$10$Ztlsk2egTzioVxXvEqkLWOBLepYGYFKMWMpWqHrmDdA1Uoy0AYvSu', 'Kwame Mensah', 'manager1@yellowman.com.gh', '+233 246000001', 'manager', 'manager', NULL),
+(3, 'warehouse1', '$2y$10$sXkNFV5eVKpwZLXhlqCtDug.XqoRHdU0sTSsPWaWVGs40YmIfPXIy', 'Ama Boateng', 'warehouse1@yellowman.com.gh', '+233 246000002', 'warehouse', 'warehouse', 1),
+(4, 'clerk1', '$2y$10$5O/fqle5B0wJ7g/PMIxb7upmFnlMKiARH34aGMZ.jjDsDsk7a8JPK', 'Yaw Owusu', 'clerk1@yellowman.com.gh', '+233 246000003', 'sales_clerk', 'sales_clerk', 1),
+(5, 'cashier1', '$2y$10$xQ5J5a9krrnfhflbazXPFOjWfR7YPjBGgDCNm4aJvFZgSiEXai06a', 'Akosua Asare', 'cashier1@yellowman.com.gh', '+233 246000004', 'cashier', 'cashier', 1),
+(6, 'minimanager1', '$2y$10$tK2xbrFol1JHfy8kqEFbAuQwyCemRI7ZpPmeJfDlyFJds7ucPODFe', 'Store Two Supervisor', 'minimanager1@yellowman.com.gh', '+233 246000005', 'mini_manager', 'mini_manager', 2)
+ON DUPLICATE KEY UPDATE full_name = VALUES(full_name), roles = COALESCE(NULLIF(roles, ''), VALUES(roles));
 
 UPDATE `stores` SET `manager_id` = 2 WHERE `id` = 1;
 
@@ -273,17 +335,93 @@ CREATE TABLE IF NOT EXISTS `sales` (
   `user_id` int(11) NOT NULL,
   `customer_name` varchar(100) DEFAULT NULL,
   `customer_phone` varchar(20) DEFAULT NULL,
+  `subtotal_amount` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `discount_amount` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `vat_amount` decimal(10,2) NOT NULL DEFAULT 0.00,
   `total_amount` decimal(10,2) NOT NULL,
+  `balance_amount` decimal(10,2) NOT NULL DEFAULT 0.00,
   `payment_method` enum('cash','mobile_money','card','credit') NOT NULL,
   `transaction_id` varchar(100) DEFAULT NULL,
+  `payment_status` enum('pending','approved') NOT NULL DEFAULT 'pending',
+  `approved_by` int(11) DEFAULT NULL,
+  `approved_at` datetime DEFAULT NULL,
+  `corrected_by` int(11) DEFAULT NULL,
+  `corrected_at` datetime DEFAULT NULL,
   `sale_date` datetime DEFAULT current_timestamp(),
   `notes` text DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `store_id` (`store_id`),
   KEY `user_id` (`user_id`),
   KEY `idx_sale_date` (`sale_date`),
-  KEY `idx_transaction` (`transaction_id`)
+  KEY `idx_transaction` (`transaction_id`),
+  KEY `idx_payment_status` (`payment_status`),
+  KEY `approved_by` (`approved_by`),
+  KEY `corrected_by` (`corrected_by`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- Add payment approval tracking while preserving existing sales as approved.
+DELIMITER $$
+CREATE PROCEDURE `_add_sales_payment_approval`()
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sales' AND COLUMN_NAME = 'payment_status') THEN
+    ALTER TABLE `sales`
+      ADD COLUMN `payment_status` enum('pending','approved') NOT NULL DEFAULT 'approved' AFTER `transaction_id`,
+      ADD COLUMN `approved_by` int(11) DEFAULT NULL AFTER `payment_status`,
+      ADD COLUMN `approved_at` datetime DEFAULT NULL AFTER `approved_by`,
+      ADD KEY `idx_payment_status` (`payment_status`),
+      ADD KEY `approved_by` (`approved_by`);
+    ALTER TABLE `sales` MODIFY COLUMN `payment_status` enum('pending','approved') NOT NULL DEFAULT 'pending';
+  END IF;
+END$$
+DELIMITER ;
+CALL _add_sales_payment_approval();
+DROP PROCEDURE `_add_sales_payment_approval`;
+
+-- Track the administrator or manager responsible for receipt corrections.
+DELIMITER $$
+CREATE PROCEDURE `_add_sales_correction_tracking`()
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sales' AND COLUMN_NAME = 'corrected_by') THEN
+    ALTER TABLE `sales`
+      ADD COLUMN `corrected_by` int(11) DEFAULT NULL AFTER `approved_at`,
+      ADD COLUMN `corrected_at` datetime DEFAULT NULL AFTER `corrected_by`,
+      ADD KEY `corrected_by` (`corrected_by`);
+  END IF;
+END$$
+DELIMITER ;
+CALL _add_sales_correction_tracking();
+DROP PROCEDURE `_add_sales_correction_tracking`;
+
+-- Add checkout totals to existing installations. Existing sales retain
+-- their original total and have no outstanding balance.
+DELIMITER $$
+CREATE PROCEDURE `_add_sales_checkout_totals`()
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sales' AND COLUMN_NAME = 'subtotal_amount') THEN
+    ALTER TABLE `sales`
+      ADD COLUMN `subtotal_amount` decimal(10,2) NOT NULL DEFAULT 0.00 AFTER `customer_phone`,
+      ADD COLUMN `discount_amount` decimal(10,2) NOT NULL DEFAULT 0.00 AFTER `subtotal_amount`,
+      ADD COLUMN `vat_amount` decimal(10,2) NOT NULL DEFAULT 0.00 AFTER `discount_amount`,
+      ADD COLUMN `balance_amount` decimal(10,2) NOT NULL DEFAULT 0.00 AFTER `total_amount`;
+    UPDATE `sales` SET `subtotal_amount` = `total_amount`;
+  END IF;
+END$$
+DELIMITER ;
+CALL _add_sales_checkout_totals();
+DROP PROCEDURE `_add_sales_checkout_totals`;
+
+-- Older versions briefly stored an amount-paid field. Payment approval now
+-- represents full payment, so the separate field is no longer needed.
+DELIMITER $$
+CREATE PROCEDURE `_remove_sales_amount_paid`()
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'sales' AND COLUMN_NAME = 'amount_paid') THEN
+    ALTER TABLE `sales` DROP COLUMN `amount_paid`;
+  END IF;
+END$$
+DELIMITER ;
+CALL _remove_sales_amount_paid();
+DROP PROCEDURE `_remove_sales_amount_paid`;
 
 -- --------------------------------------------------------
 -- Table structure for table `sale_items`
@@ -338,6 +476,118 @@ DELIMITER ;
 
 CALL _migrate_sales_to_line_items();
 DROP PROCEDURE `_migrate_sales_to_line_items`;
+
+-- --------------------------------------------------------
+-- Table structure for table `machine_fee_payments`
+-- --------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS `machine_fee_payments` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `store_id` int(11) NOT NULL,
+  `collected_by` int(11) NOT NULL,
+  `services` varchar(255) NOT NULL,
+  `payer_name` varchar(100) NOT NULL,
+  `payer_phone` varchar(20) DEFAULT NULL,
+  `amount` decimal(10,2) NOT NULL,
+  `payment_method` enum('cash','mobile_money','card') NOT NULL,
+  `transaction_id` varchar(100) NOT NULL,
+  `paid_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `transaction_id` (`transaction_id`),
+  KEY `store_id` (`store_id`),
+  KEY `collected_by` (`collected_by`),
+  KEY `idx_machine_fee_paid_at` (`paid_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+-- Table structure for table `attendance`
+-- --------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS `attendance` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `user_id` int(11) NOT NULL,
+  `store_id` int(11) DEFAULT NULL,
+  `attendance_date` date NOT NULL,
+  `clock_in` datetime NOT NULL,
+  `clock_out` datetime DEFAULT NULL,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `user_attendance_date` (`user_id`,`attendance_date`),
+  KEY `store_id` (`store_id`),
+  KEY `idx_attendance_date` (`attendance_date`),
+  KEY `idx_clock_out` (`clock_out`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
+-- Table structure for table `deposits`
+-- --------------------------------------------------------
+
+-- Replace the short-lived sales-payment deposit model when it is still
+-- empty. Deposit orders now exist before a sale and move stock on collection.
+DELIMITER $$
+CREATE PROCEDURE `_upgrade_empty_legacy_deposits`()
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'deposits') THEN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'deposits' AND COLUMN_NAME = 'customer_name')
+       AND (SELECT COUNT(*) FROM `deposits`) = 0 THEN
+      DROP TABLE `deposits`;
+    END IF;
+  END IF;
+END$$
+DELIMITER ;
+CALL _upgrade_empty_legacy_deposits();
+DROP PROCEDURE `_upgrade_empty_legacy_deposits`;
+
+CREATE TABLE IF NOT EXISTS `deposits` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `store_id` int(11) NOT NULL,
+  `created_by` int(11) NOT NULL,
+  `completed_sale_id` int(11) DEFAULT NULL,
+  `deposit_number` varchar(40) NOT NULL,
+  `customer_name` varchar(100) NOT NULL,
+  `customer_phone` varchar(20) DEFAULT NULL,
+  `total_amount` decimal(12,2) NOT NULL,
+  `paid_amount` decimal(12,2) NOT NULL DEFAULT 0.00,
+  `balance_amount` decimal(12,2) NOT NULL,
+  `status` enum('pending','paid','collected','cancelled') NOT NULL DEFAULT 'pending',
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `collected_at` datetime DEFAULT NULL,
+  `collected_by` int(11) DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `deposit_number` (`deposit_number`),
+  KEY `store_id` (`store_id`),
+  KEY `created_by` (`created_by`),
+  KEY `completed_sale_id` (`completed_sale_id`),
+  KEY `collected_by` (`collected_by`),
+  KEY `idx_deposit_status` (`status`),
+  KEY `idx_deposit_created_at` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE IF NOT EXISTS `deposit_items` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `deposit_id` int(11) NOT NULL,
+  `product_id` int(11) NOT NULL,
+  `quantity` int(11) NOT NULL,
+  `unit_price` decimal(10,2) NOT NULL,
+  `subtotal` decimal(12,2) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `deposit_product` (`deposit_id`,`product_id`),
+  KEY `product_id` (`product_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+CREATE TABLE IF NOT EXISTS `deposit_payments` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `deposit_id` int(11) NOT NULL,
+  `received_by` int(11) NOT NULL,
+  `amount` decimal(12,2) NOT NULL,
+  `payment_method` enum('cash','mobile_money','card','bank_transfer','cheque') NOT NULL,
+  `paid_at` datetime NOT NULL DEFAULT current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `deposit_id` (`deposit_id`),
+  KEY `received_by` (`received_by`),
+  KEY `idx_deposit_payment_paid_at` (`paid_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 -- --------------------------------------------------------
 -- Table structure for table `transfers`
@@ -397,6 +647,9 @@ DELIMITER ;
 CALL _add_fk_if_missing('audit_log', 'audit_log_ibfk_1',
   'ALTER TABLE `audit_log` ADD CONSTRAINT `audit_log_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL');
 
+CALL _add_fk_if_missing('users', 'users_ibfk_1',
+  'ALTER TABLE `users` ADD CONSTRAINT `users_ibfk_1` FOREIGN KEY (`store_id`) REFERENCES `stores` (`id`) ON DELETE RESTRICT');
+
 CALL _add_fk_if_missing('categories', 'categories_ibfk_1',
   'ALTER TABLE `categories` ADD CONSTRAINT `categories_ibfk_1` FOREIGN KEY (`parent_category_id`) REFERENCES `categories` (`id`) ON DELETE CASCADE');
 
@@ -422,11 +675,42 @@ CALL _add_fk_if_missing('sales', 'sales_ibfk_2',
   'ALTER TABLE `sales` ADD CONSTRAINT `sales_ibfk_2` FOREIGN KEY (`store_id`) REFERENCES `stores` (`id`) ON DELETE CASCADE');
 CALL _add_fk_if_missing('sales', 'sales_ibfk_3',
   'ALTER TABLE `sales` ADD CONSTRAINT `sales_ibfk_3` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE');
+CALL _add_fk_if_missing('sales', 'sales_ibfk_4',
+  'ALTER TABLE `sales` ADD CONSTRAINT `sales_ibfk_4` FOREIGN KEY (`approved_by`) REFERENCES `users` (`id`) ON DELETE SET NULL');
+CALL _add_fk_if_missing('sales', 'sales_ibfk_5',
+  'ALTER TABLE `sales` ADD CONSTRAINT `sales_ibfk_5` FOREIGN KEY (`corrected_by`) REFERENCES `users` (`id`) ON DELETE SET NULL');
 
 CALL _add_fk_if_missing('sale_items', 'sale_items_ibfk_1',
   'ALTER TABLE `sale_items` ADD CONSTRAINT `sale_items_ibfk_1` FOREIGN KEY (`sale_id`) REFERENCES `sales` (`id`) ON DELETE CASCADE');
 CALL _add_fk_if_missing('sale_items', 'sale_items_ibfk_2',
   'ALTER TABLE `sale_items` ADD CONSTRAINT `sale_items_ibfk_2` FOREIGN KEY (`product_id`) REFERENCES `products` (`id`) ON DELETE CASCADE');
+
+CALL _add_fk_if_missing('machine_fee_payments', 'machine_fee_payments_ibfk_1',
+  'ALTER TABLE `machine_fee_payments` ADD CONSTRAINT `machine_fee_payments_ibfk_1` FOREIGN KEY (`store_id`) REFERENCES `stores` (`id`) ON DELETE RESTRICT');
+CALL _add_fk_if_missing('machine_fee_payments', 'machine_fee_payments_ibfk_2',
+  'ALTER TABLE `machine_fee_payments` ADD CONSTRAINT `machine_fee_payments_ibfk_2` FOREIGN KEY (`collected_by`) REFERENCES `users` (`id`) ON DELETE RESTRICT');
+
+CALL _add_fk_if_missing('attendance', 'attendance_ibfk_1',
+  'ALTER TABLE `attendance` ADD CONSTRAINT `attendance_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE');
+CALL _add_fk_if_missing('attendance', 'attendance_ibfk_2',
+  'ALTER TABLE `attendance` ADD CONSTRAINT `attendance_ibfk_2` FOREIGN KEY (`store_id`) REFERENCES `stores` (`id`) ON DELETE SET NULL');
+
+CALL _add_fk_if_missing('deposits', 'deposits_ibfk_1',
+  'ALTER TABLE `deposits` ADD CONSTRAINT `deposits_ibfk_1` FOREIGN KEY (`store_id`) REFERENCES `stores` (`id`) ON DELETE RESTRICT');
+CALL _add_fk_if_missing('deposits', 'deposits_ibfk_2',
+  'ALTER TABLE `deposits` ADD CONSTRAINT `deposits_ibfk_2` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE RESTRICT');
+CALL _add_fk_if_missing('deposits', 'deposits_ibfk_3',
+  'ALTER TABLE `deposits` ADD CONSTRAINT `deposits_ibfk_3` FOREIGN KEY (`completed_sale_id`) REFERENCES `sales` (`id`) ON DELETE SET NULL');
+CALL _add_fk_if_missing('deposits', 'deposits_ibfk_4',
+  'ALTER TABLE `deposits` ADD CONSTRAINT `deposits_ibfk_4` FOREIGN KEY (`collected_by`) REFERENCES `users` (`id`) ON DELETE SET NULL');
+CALL _add_fk_if_missing('deposit_items', 'deposit_items_ibfk_1',
+  'ALTER TABLE `deposit_items` ADD CONSTRAINT `deposit_items_ibfk_1` FOREIGN KEY (`deposit_id`) REFERENCES `deposits` (`id`) ON DELETE CASCADE');
+CALL _add_fk_if_missing('deposit_items', 'deposit_items_ibfk_2',
+  'ALTER TABLE `deposit_items` ADD CONSTRAINT `deposit_items_ibfk_2` FOREIGN KEY (`product_id`) REFERENCES `products` (`id`) ON DELETE RESTRICT');
+CALL _add_fk_if_missing('deposit_payments', 'deposit_payments_ibfk_1',
+  'ALTER TABLE `deposit_payments` ADD CONSTRAINT `deposit_payments_ibfk_1` FOREIGN KEY (`deposit_id`) REFERENCES `deposits` (`id`) ON DELETE CASCADE');
+CALL _add_fk_if_missing('deposit_payments', 'deposit_payments_ibfk_2',
+  'ALTER TABLE `deposit_payments` ADD CONSTRAINT `deposit_payments_ibfk_2` FOREIGN KEY (`received_by`) REFERENCES `users` (`id`) ON DELETE RESTRICT');
 
 CALL _add_fk_if_missing('stores', 'stores_ibfk_1',
   'ALTER TABLE `stores` ADD CONSTRAINT `stores_ibfk_1` FOREIGN KEY (`manager_id`) REFERENCES `users` (`id`) ON DELETE SET NULL');
