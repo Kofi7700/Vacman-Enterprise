@@ -5,7 +5,7 @@ require_role('admin', 'manager');
 $pdo = db();
 $isAdmin = is_role('admin');
 
-// ---- Add store and initialize its inventory --------------------------
+// ---- Add store without automatically assigning catalog products ------
 if (is_post() && isset($_POST['add_store'])) {
     verify_csrf();
     $errors = validate($_POST, ['name' => 'required', 'location' => 'required']);
@@ -26,17 +26,14 @@ if (is_post() && isset($_POST['add_store'])) {
             ]);
             $storeId = (int) $pdo->lastInsertId();
 
-            $productIds = $pdo->query('SELECT id FROM products')->fetchAll(PDO::FETCH_COLUMN);
-            $inventoryStmt = $pdo->prepare('INSERT INTO inventory (product_id, store_id, quantity) VALUES (?, ?, 0)');
-            foreach ($productIds as $productId) $inventoryStmt->execute([$productId, $storeId]);
-
             $pdo->commit();
             log_audit('create', 'store', $storeId, null, [
                 'name' => trim($_POST['name']),
                 'location' => trim($_POST['location']),
                 'manager_id' => $managerId,
+                'products_assigned' => 0,
             ]);
-            flash_set('success', 'Store added successfully.');
+            flash_set('success', 'Store added without products. Products can be assigned when users are ready.');
         } catch (PDOException $e) {
             if ($pdo->inTransaction()) $pdo->rollBack();
             error_log('Add store failed: ' . $e->getMessage());
@@ -228,7 +225,7 @@ require __DIR__ . '/includes/header.php';
       <div class="col-12"><label class="form-label" for="addStoreAddress">Street address <span class="text-muted fw-normal">(optional)</span></label><textarea class="form-control" name="address" id="addStoreAddress" rows="2" placeholder="Building, street, landmark"></textarea></div>
       <div class="col-md-5"><label class="form-label" for="addStorePhone">Contact phone <span class="text-muted fw-normal">(optional)</span></label><input type="tel" class="form-control" name="contact_phone" id="addStorePhone" maxlength="20" placeholder="+233 ..."></div>
       <div class="col-md-7"><label class="form-label" for="addStoreManager">Store manager</label><select class="form-select" name="manager_id" id="addStoreManager" <?= !$isAdmin ? 'disabled' : '' ?>><option value="">Leave unassigned</option><?php foreach ($managers as $manager): ?><option value="<?= (int) $manager['id'] ?>"><?= e($manager['full_name']) ?></option><?php endforeach; ?></select><?php if (!$isAdmin): ?><small class="text-muted">Only an administrator can assign store managers.</small><?php endif; ?></div>
-    </div><div class="store-inventory-note mt-4"><i class="bi bi-boxes"></i><div><strong>Inventory ready from day one</strong><small>The new store receives a zero-stock inventory record for every existing product.</small></div></div></div>
+    </div><div class="store-inventory-note mt-4"><i class="bi bi-boxes"></i><div><strong>Start with an empty inventory</strong><small>Existing products will not be added automatically. Users can assign products to this store later from the Products page.</small></div></div></div>
     <div class="modal-footer border-0 px-4 pb-4 pt-0"><button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button><button type="submit" class="btn store-save-button"><i class="bi bi-plus-lg me-2"></i>Create store</button></div>
   </form></div></div>
 </div>

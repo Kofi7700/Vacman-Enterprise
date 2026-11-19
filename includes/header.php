@@ -94,11 +94,13 @@ function nav_active(string $file, string $current): string
         <span class="sidebar-section-label">Inventory</span>
         <a class="nav-link <?= nav_active('products.php', $currentFile) ?>" href="products.php"><i class="bi bi-box-seam"></i><span>Products</span></a>
         <a class="nav-link <?= nav_active('inventory.php', $currentFile) ?>" href="inventory.php"><i class="bi bi-clipboard-check"></i><span>Stock levels</span></a>
+        <?php if (!is_role('warehouse') && is_role('admin', 'manager', 'mini_manager', 'cashier', 'sales_clerk')): ?>
         <a class="nav-link <?= nav_active('sales.php', $currentFile) ?>" href="sales.php"><i class="bi bi-bag-check"></i><span>Sales</span></a>
+        <?php endif; ?>
         <?php if (is_role('admin', 'manager', 'cashier')): ?>
         <a class="nav-link <?= nav_active('machine_fees.php', $currentFile) ?>" href="machine_fees.php"><i class="bi bi-gear-wide-connected"></i><span>Machine fees</span></a>
         <?php endif; ?>
-        <?php if (is_role('admin', 'manager', 'mini_manager', 'cashier', 'sales_clerk')): ?>
+        <?php if (!is_role('warehouse') && is_role('admin', 'manager', 'mini_manager', 'cashier', 'sales_clerk')): ?>
         <a class="nav-link <?= nav_active('deposits.php', $currentFile) ?>" href="deposits.php"><i class="bi bi-bank"></i><span>Deposits</span></a>
         <?php endif; ?>
 

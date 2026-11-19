@@ -1,13 +1,13 @@
 <?php
 require_once __DIR__ . '/config/config.php';
-require_login();
+require_role('admin', 'manager', 'mini_manager', 'cashier', 'sales_clerk');
 
 $pdo = db();
 $canSell = is_role('admin', 'manager', 'mini_manager', 'sales_clerk');
 $canApprovePayment = is_role('admin', 'manager', 'mini_manager', 'cashier');
 $canCorrectSale = is_role('admin', 'manager');
-$canViewAllStores = is_role('admin', 'manager');
-$assignedStoreId = $canViewAllStores ? 0 : (int) (current_user()['store_id'] ?? 0);
+$canViewAllStores = can_view_all_stores();
+$assignedStoreId = $canViewAllStores ? 0 : assigned_store_id();
 
 // ---- Delete sale and reverse its stock movement (admin only) ---------
 if (is_post() && isset($_POST['delete_sale'])) {
@@ -354,7 +354,11 @@ if (is_post() && isset($_POST['add_sale'])) {
 $storeSql = 'SELECT id, name FROM stores WHERE status = "active"';
 if (!$canViewAllStores) $storeSql .= ' AND id = ' . $assignedStoreId;
 $stores = $pdo->query($storeSql . ' ORDER BY name')->fetchAll();
-$products = $pdo->query('SELECT id, name, sku, unit_price FROM products WHERE status = "active" ORDER BY name')->fetchAll();
+$productSql = 'SELECT DISTINCT p.id, p.name, p.sku, p.unit_price FROM products p';
+if (!$canViewAllStores) $productSql .= ' JOIN inventory i ON i.product_id = p.id';
+$productSql .= ' WHERE p.status = "active"';
+if (!$canViewAllStores) $productSql .= $assignedStoreId > 0 ? ' AND i.store_id = ' . $assignedStoreId : ' AND 1 = 0';
+$products = $pdo->query($productSql . ' ORDER BY p.name')->fetchAll();
 
 $storeFilter = $canViewAllStores ? (int) ($_GET['store_id'] ?? 0) : $assignedStoreId;
 $dateFilter = trim($_GET['sale_date'] ?? '');
@@ -700,7 +704,7 @@ require __DIR__ . '/includes/header.php';
 <?php
 $extraScripts = '<script>
   const saleProducts = ' . json_encode(array_map(static function ($product) {
-        return ['id' => (int) $product['id'], 'name' => $product['name'], 'sku' => $product['sku'], 'price' => (float) $product['unit_price']];
+        return ['id' => (int) $product['id'], 'name' => $product['name'], 'sku' => $product['sku'], 'price' => (float) $product['unit_price'], 'dimensional_conversion' => product_conversion_note($product['name'])];
     }, $products), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';
   const currencySymbol = ' . json_encode(CURRENCY_SYMBOL, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';
   const saleItemsBody = document.getElementById("saleItemsBody");
@@ -795,7 +799,7 @@ $extraScripts = '<script>
     row.setAttribute("data-product-id", product.id);
     row.setAttribute("data-price", product.price);
     row.innerHTML =
-      "<td><div class=\"sales-cart-product\"><strong>" + escapeHtml(product.name) + "</strong><small>" + escapeHtml(product.sku) + " · " + currencySymbol + product.price.toFixed(2) + " per piece</small></div>" +
+      "<td><div class=\"sales-cart-product\"><strong>" + escapeHtml(product.name) + "</strong><small>" + escapeHtml(product.sku) + " · " + currencySymbol + product.price.toFixed(2) + " per piece" + (product.dimensional_conversion ? " · " + escapeHtml(product.dimensional_conversion) : "") + "</small></div>" +
       "<input type=\"hidden\" name=\"product_id[]\" value=\"" + product.id + "\"></td>" +
       "<td><input type=\"number\" class=\"form-control sales-quantity-input\" name=\"quantity[]\" min=\"1\" value=\"1\" required></td>" +
       "<td class=\"sale-line-total text-end\">" + currencySymbol + "0.00</td>" +

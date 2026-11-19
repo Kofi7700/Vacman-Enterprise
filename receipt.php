@@ -132,7 +132,7 @@ $balanceAmount = (float) ($sale['balance_amount'] ?? 0);
         <?php foreach ($saleItems as $item): ?>
         <tr>
           <td class="qty"><?= (int) $item['quantity'] ?></td>
-          <td class="description"><?= e($item['product_name']) ?><br><span class="sub"><?= e($item['sku']) ?></span></td>
+          <td class="description"><?= e($item['product_name']) ?><br><span class="sub"><?= e($item['sku']) ?><?php if (has_product_dimensional_conversion($item['product_name'])): ?><br><?= e(product_quantity_label($item['product_name'], (int) $item['quantity'])) ?><?php endif; ?></span></td>
           <td class="price"><?= e(money($item['unit_price'])) ?></td>
           <td class="amount"><?= e(money($item['subtotal'])) ?></td>
         </tr>

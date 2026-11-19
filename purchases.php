@@ -5,7 +5,8 @@ require_role('admin', 'manager', 'mini_manager', 'warehouse');
 $pdo = db();
 $canReceive = is_role('admin', 'warehouse');
 $canCancel = is_role('admin', 'manager', 'mini_manager');
-$miniManagerStoreId = is_role('mini_manager') && !is_role('admin', 'manager', 'warehouse') ? (int) (current_user()['store_id'] ?? 0) : 0;
+$canViewAllStores = can_view_all_stores();
+$assignedStoreId = $canViewAllStores ? 0 : assigned_store_id();
 
 // ---- Create purchase order -------------------------------------------
 if (is_post() && isset($_POST['add_purchase'])) {
@@ -24,7 +25,12 @@ if (is_post() && isset($_POST['add_purchase'])) {
     $unitCost = (float) ($_POST['unit_cost'] ?? 0);
     if ($quantity < 1) $errors[] = 'Quantity must be at least 1.';
     if ($unitCost <= 0) $errors[] = 'Cost per piece must be greater than 0.';
-    if ($miniManagerStoreId > 0 && (int) ($_POST['store_id'] ?? 0) !== $miniManagerStoreId) $errors[] = 'Mini managers can create purchase orders only for their assigned store.';
+    if (!$canViewAllStores && ($assignedStoreId <= 0 || (int) ($_POST['store_id'] ?? 0) !== $assignedStoreId)) $errors[] = 'You can create purchase orders only for your assigned store.';
+    if (!$canViewAllStores && $assignedStoreId > 0 && (int) ($_POST['product_id'] ?? 0) > 0) {
+        $availableStmt = $pdo->prepare('SELECT COUNT(*) FROM inventory WHERE product_id = ? AND store_id = ?');
+        $availableStmt->execute([(int) $_POST['product_id'], $assignedStoreId]);
+        if (!(int) $availableStmt->fetchColumn()) $errors[] = 'Select a product available to your assigned store.';
+    }
 
     if (empty($errors)) {
         try {
@@ -80,6 +86,9 @@ if (is_post() && isset($_POST['mark_delivered'])) {
         if (!$purchase) {
             throw new RuntimeException('Purchase order not found.');
         }
+        if (!$canViewAllStores && ($assignedStoreId <= 0 || (int) $purchase['store_id'] !== $assignedStoreId)) {
+            throw new RuntimeException('You can receive purchase orders only for your assigned store.');
+        }
         if ($purchase['status'] !== 'ordered') {
             throw new RuntimeException('Only an ordered purchase can be marked delivered.');
         }
@@ -122,7 +131,7 @@ if (is_post() && isset($_POST['cancel_purchase'])) {
 
     $cancelSql = "UPDATE purchases SET status = 'cancelled' WHERE id = ? AND status = 'ordered'";
     $cancelParams = [$purchaseId];
-    if ($miniManagerStoreId > 0) { $cancelSql .= ' AND store_id = ?'; $cancelParams[] = $miniManagerStoreId; }
+    if (!$canViewAllStores) { $cancelSql .= ' AND store_id = ?'; $cancelParams[] = $assignedStoreId; }
     $stmt = $pdo->prepare($cancelSql);
     $stmt->execute($cancelParams);
     if ($stmt->rowCount() === 1) {
@@ -135,9 +144,13 @@ if (is_post() && isset($_POST['cancel_purchase'])) {
 }
 
 // ---- Data and filters -------------------------------------------------
-$products = $pdo->query('SELECT id, name, sku, supplier_name FROM products WHERE status = "active" ORDER BY name')->fetchAll();
+$productSql = 'SELECT DISTINCT p.id, p.name, p.sku, p.supplier_name FROM products p';
+if (!$canViewAllStores) $productSql .= ' JOIN inventory i ON i.product_id = p.id';
+$productSql .= ' WHERE p.status = "active"';
+if (!$canViewAllStores) $productSql .= $assignedStoreId > 0 ? ' AND i.store_id = ' . $assignedStoreId : ' AND 1 = 0';
+$products = $pdo->query($productSql . ' ORDER BY p.name')->fetchAll();
 $storeSql = 'SELECT id, name FROM stores WHERE status = "active"';
-if ($miniManagerStoreId > 0) $storeSql .= ' AND id = ' . $miniManagerStoreId;
+if (!$canViewAllStores) $storeSql .= $assignedStoreId > 0 ? ' AND id = ' . $assignedStoreId : ' AND 1 = 0';
 $stores = $pdo->query($storeSql . ' ORDER BY name')->fetchAll();
 
 $preselectProduct = (int) ($_GET['product_id'] ?? 0);
@@ -151,7 +164,7 @@ foreach ($products as $product) {
 
 $search = trim($_GET['q'] ?? '');
 $statusFilter = $_GET['status'] ?? 'all';
-$storeFilter = (int) ($_GET['store_id'] ?? 0);
+$storeFilter = $canViewAllStores ? (int) ($_GET['store_id'] ?? 0) : $assignedStoreId;
 if (!in_array($statusFilter, ['all', 'ordered', 'delivered', 'cancelled'], true)) $statusFilter = 'all';
 
 $sql = "SELECT pu.*, p.name AS product_name, p.sku, s.name AS store_name
@@ -174,9 +187,13 @@ if ($storeFilter > 0) {
     $conditions[] = 'pu.store_id = :store_id';
     $params[':store_id'] = $storeFilter;
 }
-if ($miniManagerStoreId > 0) {
-    $conditions[] = 'pu.store_id = :mini_manager_store';
-    $params[':mini_manager_store'] = $miniManagerStoreId;
+if (!$canViewAllStores) {
+    if ($assignedStoreId > 0) {
+        $conditions[] = 'pu.store_id = :assigned_store';
+        $params[':assigned_store'] = $assignedStoreId;
+    } else {
+        $conditions[] = '1 = 0';
+    }
 }
 if ($conditions) $sql .= ' WHERE ' . implode(' AND ', $conditions);
 $sql .= ' ORDER BY pu.created_at DESC LIMIT 100';
@@ -185,7 +202,7 @@ $purchaseStmt = $pdo->prepare($sql);
 $purchaseStmt->execute($params);
 $purchases = $purchaseStmt->fetchAll();
 
-$purchaseStoreScope = $miniManagerStoreId > 0 ? ' WHERE store_id = ' . $miniManagerStoreId : '';
+$purchaseStoreScope = !$canViewAllStores ? ($assignedStoreId > 0 ? ' WHERE store_id = ' . $assignedStoreId : ' WHERE 1 = 0') : '';
 $purchaseMetrics = $pdo->query("
     SELECT
       COUNT(*) AS total_orders,
@@ -238,7 +255,7 @@ require __DIR__ . '/includes/header.php';
 
   <form class="purchase-filters" method="GET" action="purchases.php" role="search">
     <div class="purchase-search"><i class="bi bi-search"></i><input type="search" class="form-control" name="q" value="<?= old($_GET, 'q') ?>" placeholder="Search PO, product, or supplier"></div>
-    <select name="store_id" class="form-select"><option value="0">All stores</option><?php foreach ($stores as $store): ?><option value="<?= (int) $store['id'] ?>" <?= $storeFilter === (int) $store['id'] ? 'selected' : '' ?>><?= e($store['name']) ?></option><?php endforeach; ?></select>
+    <select name="store_id" class="form-select" <?= !$canViewAllStores ? 'disabled' : '' ?>><?php if ($canViewAllStores): ?><option value="0">All stores</option><?php endif; ?><?php foreach ($stores as $store): ?><option value="<?= (int) $store['id'] ?>" <?= $storeFilter === (int) $store['id'] ? 'selected' : '' ?>><?= e($store['name']) ?></option><?php endforeach; ?></select>
     <select name="status" class="form-select"><option value="all">All statuses</option><option value="ordered" <?= $statusFilter === 'ordered' ? 'selected' : '' ?>>Ordered</option><option value="delivered" <?= $statusFilter === 'delivered' ? 'selected' : '' ?>>Delivered</option><option value="cancelled" <?= $statusFilter === 'cancelled' ? 'selected' : '' ?>>Cancelled</option></select>
     <button class="btn purchase-filter-button" type="submit"><i class="bi bi-funnel me-2"></i>Apply</button>
     <?php if ($search !== '' || $storeFilter > 0 || $statusFilter !== 'all'): ?><a href="purchases.php" class="btn purchase-clear-button" title="Clear filters"><i class="bi bi-x-lg"></i></a><?php endif; ?>
@@ -253,7 +270,7 @@ require __DIR__ . '/includes/header.php';
         <?php else: foreach ($purchases as $purchase): ?>
         <tr>
           <td><div class="purchase-reference"><span><i class="bi bi-file-earmark-text"></i></span><div><strong><?= e($purchase['purchase_order_number'] ?: 'PO-' . $purchase['id']) ?></strong><small><?= e(date('M j, Y', strtotime($purchase['purchase_date']))) ?></small></div></div></td>
-          <td><div class="purchase-product"><strong><?= e($purchase['product_name']) ?></strong><small><?= e($purchase['sku']) ?> · <?= (int) $purchase['quantity'] ?> pieces</small></div></td>
+          <td><div class="purchase-product"><strong><?= e($purchase['product_name']) ?></strong><small><?= e($purchase['sku']) ?> · <?= e(product_quantity_label($purchase['product_name'], (int) $purchase['quantity'])) ?></small></div></td>
           <td><span class="purchase-store"><i class="bi bi-shop"></i><?= e($purchase['store_name']) ?></span></td>
           <td><?= e($purchase['supplier_name']) ?></td>
           <td><div class="purchase-value"><strong><?= e(money($purchase['total_cost'])) ?></strong><small><?= e(money($purchase['unit_cost'])) ?> each</small></div></td>
@@ -261,7 +278,7 @@ require __DIR__ . '/includes/header.php';
           <td><span class="purchase-status <?= purchase_badge($purchase['status']) ?>"><i></i><?= e(ucfirst($purchase['status'])) ?></span></td>
           <td class="text-end text-nowrap">
             <?php if ($purchase['status'] === 'ordered' && $canReceive): ?>
-            <form method="POST" action="purchases.php" class="d-inline" data-confirm="Receive this order and add <?= (int) $purchase['quantity'] ?> pieces to inventory?">
+            <form method="POST" action="purchases.php" class="d-inline" data-confirm="Receive this order and add <?= e(product_quantity_label($purchase['product_name'], (int) $purchase['quantity'])) ?> to inventory?">
               <?= csrf_field() ?><input type="hidden" name="mark_delivered" value="1"><input type="hidden" name="id" value="<?= (int) $purchase['id'] ?>">
               <button class="btn purchase-receive-button" title="Mark delivered"><i class="bi bi-box-arrow-in-down"></i><span>Receive</span></button>
             </form>
@@ -302,7 +319,7 @@ require __DIR__ . '/includes/header.php';
             <div class="col-md-6"><label class="form-label">Deliver to store</label><select class="form-select" name="store_id" required><?php foreach ($stores as $store): ?><option value="<?= (int) $store['id'] ?>"><?= e($store['name']) ?></option><?php endforeach; ?></select></div>
             <div class="col-md-6"><label class="form-label">Supplier</label><input type="text" class="form-control" name="supplier_name" placeholder="Supplier or distributor" required></div>
             <div class="col-md-6"><label class="form-label">PO number <span class="text-muted fw-normal">(optional)</span></label><input type="text" class="form-control" name="purchase_order_number" placeholder="Generated automatically if blank"></div>
-            <div class="col-md-6"><label class="form-label">Quantity (pieces)</label><input type="number" class="form-control" id="purchaseQuantity" name="quantity" min="1" required></div>
+            <div class="col-md-6"><label class="form-label">Quantity (pieces)</label><input type="number" class="form-control" id="purchaseQuantity" name="quantity" min="1" required><div class="form-text">Timber, roofing-sheet bundle, and louvre glass/frame box conversions apply automatically.</div></div>
             <div class="col-md-6"><label class="form-label">Cost per piece (<?= e(CURRENCY_SYMBOL) ?>)</label><input type="number" class="form-control" id="purchaseUnitCost" name="unit_cost" step="0.01" min="0.01" required></div>
             <div class="col-md-6"><label class="form-label">Purchase date</label><input type="date" class="form-control" name="purchase_date" value="<?= date('Y-m-d') ?>" required></div>
             <div class="col-md-6"><label class="form-label">Expected delivery <span class="text-muted fw-normal">(optional)</span></label><input type="date" class="form-control" name="expected_delivery_date"></div>

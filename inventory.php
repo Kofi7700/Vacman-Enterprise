@@ -4,9 +4,9 @@ require_login();
 
 $pdo = db();
 $canAdjust = is_role('admin', 'warehouse');
-$canViewAllStores = is_role('admin', 'warehouse', 'manager');
+$canViewAllStores = can_view_all_stores();
 $storeScopedViewer = !$canViewAllStores;
-$assignedStoreId = $storeScopedViewer ? (int) (current_user()['store_id'] ?? 0) : 0;
+$assignedStoreId = $storeScopedViewer ? assigned_store_id() : 0;
 
 // ---- Handle Stock Adjustment (physical count) ------------------------
 if (is_post() && isset($_POST['adjust_stock'])) {
@@ -21,13 +21,18 @@ if (is_post() && isset($_POST['adjust_stock'])) {
         redirect('inventory.php');
     }
 
-    $stmt = $pdo->prepare('SELECT quantity FROM inventory WHERE id = ?');
+    $stmt = $pdo->prepare('SELECT quantity, store_id FROM inventory WHERE id = ?');
     $stmt->execute([$inventoryId]);
     $old = $stmt->fetch();
 
     if (!$old) {
         flash_set('danger', 'Inventory record not found.');
         redirect('inventory.php');
+    }
+    if ($storeScopedViewer && ($assignedStoreId <= 0 || (int) $old['store_id'] !== $assignedStoreId)) {
+        http_response_code(403);
+        require __DIR__ . '/errors/403.php';
+        exit;
     }
 
     try {
@@ -109,8 +114,8 @@ require __DIR__ . '/includes/header.php';
 <section class="inventory-hero mb-4">
   <div>
     <span class="inventory-overline"><i class="bi bi-boxes me-2"></i>Stock control</span>
-    <h2>Know what is available, everywhere.</h2>
-    <p>Monitor on-hand stock, reservations, reorder points, and physical counts across every store.</p>
+    <h2><?= $canViewAllStores ? 'Know what is available, everywhere.' : 'Know what is available in your store.' ?></h2>
+    <p><?= $canViewAllStores ? 'Monitor on-hand stock, reservations, reorder points, and physical counts across every store.' : 'Monitor on-hand stock, reservations, reorder points, and physical counts for your assigned store.' ?></p>
   </div>
   <?php if ($canAdjust): ?>
   <div class="inventory-hero-note"><i class="bi bi-clipboard-check"></i><span><strong>Physical counts enabled</strong><small>Select the edit action on any row to reconcile stock.</small></span></div>
@@ -210,9 +215,9 @@ require __DIR__ . '/includes/header.php';
           </td>
           <td><span class="inventory-category"><?= e($row['category_name']) ?></span></td>
           <td><span class="inventory-store"><i class="bi bi-shop"></i><?= e($row['store_name']) ?></span></td>
-          <td><span class="inventory-stock-pill <?= $isEmpty ? 'empty' : ($isLow ? 'low' : 'healthy') ?>"><?= $quantity ?> pieces</span></td>
-          <td><strong class="inventory-available"><?= $available ?></strong></td>
-          <td><?= $reserved ?></td>
+          <td><span class="inventory-stock-pill <?= $isEmpty ? 'empty' : ($isLow ? 'low' : 'healthy') ?>"><?= e(product_quantity_label($row['product_name'], $quantity)) ?></span></td>
+          <td><strong class="inventory-available"><?= e(product_quantity_label($row['product_name'], $available)) ?></strong></td>
+          <td><?= e(product_quantity_label($row['product_name'], $reserved)) ?></td>
           <td>
             <div class="inventory-activity">
               <span title="Last received"><i class="bi bi-box-arrow-in-down"></i><?= $row['last_received_date'] ? e(date('M j, Y', strtotime($row['last_received_date']))) : 'Never' ?></span>
@@ -253,7 +258,7 @@ require __DIR__ . '/includes/header.php';
         <div class="modal-body p-4">
           <div class="inventory-current-count mb-4">
             <span class="inventory-current-icon"><i class="bi bi-boxes"></i></span>
-            <div><span>System quantity</span><strong><?= (int) $row['quantity'] ?> pieces</strong></div>
+            <div><span>System quantity</span><strong><?= e(product_quantity_label($row['product_name'], (int) $row['quantity'])) ?></strong></div>
           </div>
           <div class="mb-3">
             <label class="form-label">Counted quantity</label>
@@ -261,7 +266,7 @@ require __DIR__ . '/includes/header.php';
               <input type="number" class="form-control" name="new_quantity" min="0" value="<?= (int) $row['quantity'] ?>" required>
               <span class="input-group-text">pieces</span>
             </div>
-            <div class="form-text">Enter the quantity physically counted at this store.</div>
+            <div class="form-text">Enter the quantity physically counted at this store. Timber, roofing-sheet bundle, and louvre glass/frame box conversions apply automatically.</div>
           </div>
           <div>
             <label class="form-label">Adjustment note <span class="text-muted fw-normal">(optional)</span></label>

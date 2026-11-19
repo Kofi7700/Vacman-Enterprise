@@ -6,7 +6,8 @@ $pdo = db();
 $canRequest = is_role('admin', 'manager', 'mini_manager', 'warehouse');
 $canApprove = is_role('admin', 'manager', 'mini_manager');
 $canFulfill = is_role('admin', 'warehouse');
-$miniManagerStoreId = is_role('mini_manager') && !is_role('admin', 'manager', 'warehouse') ? (int) (current_user()['store_id'] ?? 0) : 0;
+$canViewAllStores = can_view_all_stores();
+$assignedStoreId = $canViewAllStores ? 0 : assigned_store_id();
 
 // ---- Create transfer request -----------------------------------------
 if (is_post() && isset($_POST['add_transfer'])) {
@@ -26,7 +27,12 @@ if (is_post() && isset($_POST['add_transfer'])) {
 
     if ($quantity < 1) $errors[] = 'Quantity must be at least 1.';
     if ($fromStore === $toStore && $fromStore !== 0) $errors[] = 'Source and destination stores must be different.';
-    if ($miniManagerStoreId > 0 && $fromStore !== $miniManagerStoreId) $errors[] = 'Mini managers can request transfers only from their assigned store.';
+    if (!$canViewAllStores && ($assignedStoreId <= 0 || $fromStore !== $assignedStoreId)) $errors[] = 'You can request transfers only from your assigned store.';
+    if (!$canViewAllStores && $assignedStoreId > 0 && $productId > 0) {
+        $availableStmt = $pdo->prepare('SELECT COUNT(*) FROM inventory WHERE product_id = ? AND store_id = ?');
+        $availableStmt->execute([$productId, $assignedStoreId]);
+        if (!(int) $availableStmt->fetchColumn()) $errors[] = 'Select a product available to your assigned store.';
+    }
 
     if (empty($errors)) {
         try {
@@ -83,6 +89,13 @@ if (is_post() && isset($_POST['change_status'])) {
         $stmt->execute([$id]);
         $transfer = $stmt->fetch();
         if (!$transfer) throw new RuntimeException('Transfer not found.');
+        if (!$canViewAllStores && ($assignedStoreId <= 0
+            || ((int) $transfer['from_store_id'] !== $assignedStoreId && (int) $transfer['to_store_id'] !== $assignedStoreId))) {
+            $pdo->rollBack();
+            http_response_code(403);
+            require __DIR__ . '/errors/403.php';
+            exit;
+        }
 
         $canManageDestination = is_role('admin')
             || (is_role('manager') && (int) $transfer['destination_manager_id'] === (int) current_user()['id'])
@@ -151,12 +164,18 @@ if (is_post() && isset($_POST['change_status'])) {
 
 // ---- Data, filters and summary ---------------------------------------
 $activeStores = $pdo->query('SELECT id, name FROM stores WHERE status = "active" ORDER BY name')->fetchAll();
-$filterStores = $pdo->query('SELECT id, name FROM stores ORDER BY name')->fetchAll();
-$products = $pdo->query('SELECT id, name, sku FROM products WHERE status = "active" ORDER BY name')->fetchAll();
+$filterStoreSql = 'SELECT id, name FROM stores';
+if (!$canViewAllStores) $filterStoreSql .= $assignedStoreId > 0 ? ' WHERE id = ' . $assignedStoreId : ' WHERE 1 = 0';
+$filterStores = $pdo->query($filterStoreSql . ' ORDER BY name')->fetchAll();
+$productSql = 'SELECT DISTINCT p.id, p.name, p.sku FROM products p';
+if (!$canViewAllStores) $productSql .= ' JOIN inventory i ON i.product_id = p.id';
+$productSql .= ' WHERE p.status = "active"';
+if (!$canViewAllStores) $productSql .= $assignedStoreId > 0 ? ' AND i.store_id = ' . $assignedStoreId : ' AND 1 = 0';
+$products = $pdo->query($productSql . ' ORDER BY p.name')->fetchAll();
 
 $search = trim($_GET['q'] ?? '');
 $statusFilter = $_GET['status'] ?? 'all';
-$storeFilter = (int) ($_GET['store_id'] ?? 0);
+$storeFilter = $canViewAllStores ? (int) ($_GET['store_id'] ?? 0) : $assignedStoreId;
 $validStatuses = ['all', 'pending', 'approved', 'in_transit', 'completed', 'cancelled'];
 if (!in_array($statusFilter, $validStatuses, true)) $statusFilter = 'all';
 
@@ -186,10 +205,14 @@ if ($storeFilter > 0) {
     $params[':from_store'] = $storeFilter;
     $params[':to_store'] = $storeFilter;
 }
-if ($miniManagerStoreId > 0) {
-    $conditions[] = '(t.from_store_id = :mini_from_store OR t.to_store_id = :mini_to_store)';
-    $params[':mini_from_store'] = $miniManagerStoreId;
-    $params[':mini_to_store'] = $miniManagerStoreId;
+if (!$canViewAllStores) {
+    if ($assignedStoreId > 0) {
+        $conditions[] = '(t.from_store_id = :assigned_from_store OR t.to_store_id = :assigned_to_store)';
+        $params[':assigned_from_store'] = $assignedStoreId;
+        $params[':assigned_to_store'] = $assignedStoreId;
+    } else {
+        $conditions[] = '1 = 0';
+    }
 }
 if ($conditions) $sql .= ' WHERE ' . implode(' AND ', $conditions);
 $sql .= ' ORDER BY t.created_at DESC LIMIT 100';
@@ -198,7 +221,7 @@ $transferStmt = $pdo->prepare($sql);
 $transferStmt->execute($params);
 $transfers = $transferStmt->fetchAll();
 
-$transferStoreScope = $miniManagerStoreId > 0 ? ' WHERE from_store_id = ' . $miniManagerStoreId . ' OR to_store_id = ' . $miniManagerStoreId : '';
+$transferStoreScope = !$canViewAllStores ? ($assignedStoreId > 0 ? ' WHERE from_store_id = ' . $assignedStoreId . ' OR to_store_id = ' . $assignedStoreId : ' WHERE 1 = 0') : '';
 $transferMetrics = $pdo->query("SELECT
     COUNT(*) AS total_transfers,
     COALESCE(SUM(status = 'pending'), 0) AS pending_transfers,
@@ -262,7 +285,7 @@ require __DIR__ . '/includes/header.php';
 
   <form class="transfer-filters" method="GET" action="transfers.php" role="search">
     <div class="transfer-search"><i class="bi bi-search"></i><input type="search" class="form-control" name="q" value="<?= old($_GET, 'q') ?>" placeholder="Search product, SKU, or requester"></div>
-    <select name="store_id" class="form-select" aria-label="Filter by store"><option value="0">All stores</option><?php foreach ($filterStores as $store): ?><option value="<?= (int) $store['id'] ?>" <?= $storeFilter === (int) $store['id'] ? 'selected' : '' ?>><?= e($store['name']) ?></option><?php endforeach; ?></select>
+    <select name="store_id" class="form-select" aria-label="Filter by store" <?= !$canViewAllStores ? 'disabled' : '' ?>><?php if ($canViewAllStores): ?><option value="0">All stores</option><?php endif; ?><?php foreach ($filterStores as $store): ?><option value="<?= (int) $store['id'] ?>" <?= $storeFilter === (int) $store['id'] ? 'selected' : '' ?>><?= e($store['name']) ?></option><?php endforeach; ?></select>
     <select name="status" class="form-select" aria-label="Filter by status"><option value="all">All statuses</option><option value="pending" <?= $statusFilter === 'pending' ? 'selected' : '' ?>>Pending</option><option value="approved" <?= $statusFilter === 'approved' ? 'selected' : '' ?>>Approved</option><option value="in_transit" <?= $statusFilter === 'in_transit' ? 'selected' : '' ?>>In transit</option><option value="completed" <?= $statusFilter === 'completed' ? 'selected' : '' ?>>Completed</option><option value="cancelled" <?= $statusFilter === 'cancelled' ? 'selected' : '' ?>>Cancelled</option></select>
     <button class="btn transfer-filter-button" type="submit"><i class="bi bi-funnel me-2"></i>Apply</button>
     <?php if ($search !== '' || $storeFilter > 0 || $statusFilter !== 'all'): ?><a href="transfers.php" class="btn transfer-clear-button" title="Clear filters" aria-label="Clear filters"><i class="bi bi-x-lg"></i></a><?php endif; ?>
@@ -286,7 +309,7 @@ require __DIR__ . '/includes/header.php';
           <td><div class="transfer-reference"><span><i class="bi bi-arrow-left-right"></i></span><div><strong>TRF-<?= str_pad((string) $transfer['id'], 5, '0', STR_PAD_LEFT) ?></strong><small><?= e(date('M j, Y', strtotime($transfer['transfer_date']))) ?></small></div></div></td>
           <td><div class="transfer-product"><strong><?= e($transfer['product_name']) ?></strong><small><?= e($transfer['sku']) ?></small></div></td>
           <td><div class="transfer-route"><span title="Source store"><?= e($transfer['from_store']) ?></span><i class="bi bi-arrow-right"></i><span title="Destination store"><?= e($transfer['to_store']) ?></span></div><small class="transfer-destination-manager"><i class="bi bi-person-check"></i><?= $transfer['destination_manager_name'] ? e($transfer['destination_manager_name']) . ' approves' : 'No destination manager assigned' ?></small></td>
-          <td><span class="transfer-quantity"><?= number_format((int) $transfer['quantity']) ?> <small>pieces</small></span></td>
+          <td><span class="transfer-quantity"><?= e(product_quantity_label($transfer['product_name'], (int) $transfer['quantity'])) ?></span></td>
           <td><div class="transfer-requester"><span><?= e(strtoupper(substr($transfer['requested_by_name'], 0, 1))) ?></span><div><strong><?= e($transfer['requested_by_name']) ?></strong><small><?= e(date('M j, g:i A', strtotime($transfer['created_at']))) ?></small></div></div></td>
           <td><span class="transfer-status <?= transfer_status_class($status) ?>"><i class="bi bi-<?= transfer_status_icon($status) ?>"></i><?= e(ucwords(str_replace('_', ' ', $status))) ?></span></td>
           <td class="text-end"><div class="transfer-actions">
@@ -322,10 +345,10 @@ require __DIR__ . '/includes/header.php';
               <div class="transfer-product-search"><i class="bi bi-search"></i><input type="text" class="form-control" id="transferProductSearch" placeholder="Search by product name or SKU" autocomplete="off" required><input type="hidden" name="product_id" id="transferProductId"></div>
               <div id="transferProductResults" class="transfer-search-results" role="listbox"></div>
             </div>
-            <div class="col-md-5"><label class="form-label" for="transferFromStore">Source store</label><select class="form-select" name="from_store_id" id="transferFromStore" required><option value="">Select source</option><?php foreach ($activeStores as $store): ?><option value="<?= (int) $store['id'] ?>" <?= $miniManagerStoreId > 0 && (int) $store['id'] === $miniManagerStoreId ? 'selected' : '' ?> <?= $miniManagerStoreId > 0 && (int) $store['id'] !== $miniManagerStoreId ? 'disabled' : '' ?>><?= e($store['name']) ?></option><?php endforeach; ?></select></div>
+            <div class="col-md-5"><label class="form-label" for="transferFromStore">Source store</label><select class="form-select" name="from_store_id" id="transferFromStore" required><option value="">Select source</option><?php foreach ($activeStores as $store): ?><option value="<?= (int) $store['id'] ?>" <?= !$canViewAllStores && (int) $store['id'] === $assignedStoreId ? 'selected' : '' ?> <?= !$canViewAllStores && (int) $store['id'] !== $assignedStoreId ? 'disabled' : '' ?>><?= e($store['name']) ?></option><?php endforeach; ?></select></div>
             <div class="col-md-2 d-none d-md-flex transfer-route-arrow"><span><i class="bi bi-arrow-right"></i></span></div>
             <div class="col-md-5"><label class="form-label" for="transferToStore">Destination store</label><select class="form-select" name="to_store_id" id="transferToStore" required><option value="">Select destination</option><?php foreach ($activeStores as $store): ?><option value="<?= (int) $store['id'] ?>"><?= e($store['name']) ?></option><?php endforeach; ?></select></div>
-            <div class="col-md-4"><label class="form-label" for="transferQuantity">Quantity</label><div class="input-group"><input type="number" class="form-control" name="quantity" id="transferQuantity" min="1" step="1" placeholder="0" required><span class="input-group-text">pieces</span></div></div>
+            <div class="col-md-4"><label class="form-label" for="transferQuantity">Quantity</label><div class="input-group"><input type="number" class="form-control" name="quantity" id="transferQuantity" min="1" step="1" placeholder="0" required><span class="input-group-text">pieces</span></div><div class="form-text">Timber, roofing-sheet bundle, and louvre glass/frame box conversions apply automatically.</div></div>
             <div class="col-md-8"><label class="form-label" for="transferNotes">Notes <span class="text-muted fw-normal">(optional)</span></label><input type="text" class="form-control" name="notes" id="transferNotes" maxlength="500" placeholder="Add handling or delivery instructions"></div>
           </div>
           <div class="transfer-workflow-note mt-4"><i class="bi bi-diagram-3"></i><div><strong>Approval workflow</strong><small>Requested → destination-store manager approval → In transit → Completed. Administrators can approve any destination; inventory updates when the destination receives the transfer.</small></div></div>

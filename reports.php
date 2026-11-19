@@ -3,7 +3,11 @@ require_once __DIR__ . '/config/config.php';
 require_login();
 
 $pdo = db();
-$miniManagerStoreId = is_role('mini_manager') && !is_role('admin', 'manager', 'warehouse') ? (int) (current_user()['store_id'] ?? 0) : 0;
+$canViewAllStores = can_view_all_stores();
+$assignedStoreId = assigned_store_id();
+$canReportDeposits = is_role('admin', 'manager', 'mini_manager', 'cashier', 'sales_clerk');
+$canReportMachineFees = is_role('admin', 'manager', 'cashier');
+$canReportAttendance = is_role('admin', 'manager', 'mini_manager');
 
 function valid_report_date(string $value): bool
 {
@@ -19,19 +23,24 @@ function report_csv_cell($value)
 
 $reportType = $_GET['report_type'] ?? 'sales_summary';
 $storeId = (int) ($_GET['store_id'] ?? 0);
-if ($miniManagerStoreId > 0) $storeId = $miniManagerStoreId;
+if (!$canViewAllStores) $storeId = $assignedStoreId;
 $startDate = $_GET['start_date'] ?? date('Y-m-01');
 $endDate = $_GET['end_date'] ?? date('Y-m-d');
 $validReportTypes = ['sales_summary', 'low_stock', 'inventory_valuation', 'top_products'];
+if ($canReportDeposits) $validReportTypes[] = 'deposits';
+if ($canReportMachineFees) $validReportTypes[] = 'machine_fees';
+if ($canReportAttendance) $validReportTypes[] = 'attendance';
 if (!in_array($reportType, $validReportTypes, true)) $reportType = 'sales_summary';
+
 if (!valid_report_date($startDate)) $startDate = date('Y-m-01');
 if (!valid_report_date($endDate)) $endDate = date('Y-m-d');
 if ($startDate > $endDate) [$startDate, $endDate] = [$endDate, $startDate];
 
+$reportStoreRestricted = !$canViewAllStores;
 $storeSql = 'SELECT id, name FROM stores';
-if ($miniManagerStoreId > 0) $storeSql .= ' WHERE id = ' . $miniManagerStoreId;
+if ($reportStoreRestricted) $storeSql .= ' WHERE id = ' . $assignedStoreId;
 $stores = $pdo->query($storeSql . ' ORDER BY name')->fetchAll();
-$selectedStore = 'All stores';
+$selectedStore = $reportStoreRestricted && $assignedStoreId <= 0 ? 'No assigned store' : 'All stores';
 foreach ($stores as $store) {
     if ((int) $store['id'] === $storeId) {
         $selectedStore = $store['name'];
@@ -45,12 +54,15 @@ $reportMeta = [
     'low_stock' => ['label' => 'Low Stock', 'description' => 'Items at or below their reorder level.', 'icon' => 'exclamation-triangle'],
     'inventory_valuation' => ['label' => 'Stock Value', 'description' => 'Inventory value at current selling prices.', 'icon' => 'boxes'],
 ];
+if ($canReportDeposits) $reportMeta['deposits'] = ['label' => 'Deposits', 'description' => 'Customer orders, payments, and balances.', 'icon' => 'bank'];
+if ($canReportMachineFees) $reportMeta['machine_fees'] = ['label' => 'Machine Fees', 'description' => 'Service-fee collections by day.', 'icon' => 'gear-wide-connected'];
+if ($canReportAttendance) $reportMeta['attendance'] = ['label' => 'Attendance', 'description' => 'Staff presence and completed work hours.', 'icon' => 'calendar2-check'];
 
 $results = [];
 $chartLabels = [];
 $chartValues = [];
 $summaryCards = [];
-$usesDateRange = in_array($reportType, ['sales_summary', 'top_products'], true);
+$usesDateRange = in_array($reportType, ['sales_summary', 'top_products', 'deposits', 'machine_fees', 'attendance'], true);
 
 if ($reportType === 'sales_summary') {
     $sql = "SELECT DATE(s.sale_date) AS report_date, COUNT(*) AS transaction_count,
@@ -59,7 +71,8 @@ if ($reportType === 'sales_summary') {
             FROM sales s
             WHERE s.payment_status = 'approved' AND DATE(s.sale_date) BETWEEN :start AND :end";
     $params = [':start' => $startDate, ':end' => $endDate];
-    if ($storeId > 0) { $sql .= ' AND s.store_id = :store_id'; $params[':store_id'] = $storeId; }
+    if ($reportStoreRestricted && $assignedStoreId <= 0) $sql .= ' AND 1 = 0';
+    elseif ($storeId > 0) { $sql .= ' AND s.store_id = :store_id'; $params[':store_id'] = $storeId; }
     $sql .= ' GROUP BY DATE(s.sale_date) ORDER BY report_date';
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
@@ -83,7 +96,8 @@ if ($reportType === 'sales_summary') {
             JOIN categories c ON c.id = p.category_id
             WHERE s.payment_status = 'approved' AND DATE(s.sale_date) BETWEEN :start AND :end";
     $params = [':start' => $startDate, ':end' => $endDate];
-    if ($storeId > 0) { $sql .= ' AND s.store_id = :store_id'; $params[':store_id'] = $storeId; }
+    if ($reportStoreRestricted && $assignedStoreId <= 0) $sql .= ' AND 1 = 0';
+    elseif ($storeId > 0) { $sql .= ' AND s.store_id = :store_id'; $params[':store_id'] = $storeId; }
     $sql .= ' GROUP BY p.id, p.name, p.sku, c.name ORDER BY revenue DESC LIMIT 15';
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
@@ -98,6 +112,81 @@ if ($reportType === 'sales_summary') {
         ['label' => 'Generated revenue', 'value' => money($revenue), 'hint' => 'From ranked products', 'icon' => 'cash-coin', 'tone' => 'average'],
         ['label' => 'Average per piece', 'value' => money($unitsSold ? $revenue / $unitsSold : 0), 'hint' => 'Blended selling price', 'icon' => 'tag', 'tone' => 'days'],
     ];
+} elseif ($reportType === 'deposits') {
+    $sql = "SELECT DATE(d.created_at) AS report_date, d.deposit_number, st.name AS store_name,
+                   d.customer_name, d.total_amount, d.paid_amount, d.balance_amount, d.status
+            FROM deposits d
+            JOIN stores st ON st.id = d.store_id
+            WHERE d.status <> 'cancelled' AND DATE(d.created_at) BETWEEN :start AND :end";
+    $params = [':start' => $startDate, ':end' => $endDate];
+    if ($reportStoreRestricted && $assignedStoreId <= 0) $sql .= ' AND 1 = 0';
+    elseif ($storeId > 0) { $sql .= ' AND d.store_id = :store_id'; $params[':store_id'] = $storeId; }
+    $sql .= ' ORDER BY d.created_at DESC, d.id DESC';
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    $results = $stmt->fetchAll();
+
+    $orderValue = (float) array_sum(array_column($results, 'total_amount'));
+    $payments = (float) array_sum(array_column($results, 'paid_amount'));
+    $outstanding = (float) array_sum(array_column($results, 'balance_amount'));
+    $collected = count(array_filter($results, static fn($row) => $row['status'] === 'collected'));
+    foreach ($results as $row) { $chartLabels[] = $row['deposit_number']; $chartValues[] = (float) $row['paid_amount']; }
+    $summaryCards = [
+        ['label' => 'Order value', 'value' => money($orderValue), 'hint' => 'Non-cancelled orders', 'icon' => 'receipt-cutoff', 'tone' => 'revenue'],
+        ['label' => 'Payments received', 'value' => money($payments), 'hint' => 'Paid against these orders', 'icon' => 'cash-coin', 'tone' => 'transactions'],
+        ['label' => 'Outstanding', 'value' => money($outstanding), 'hint' => 'Balances still due', 'icon' => 'hourglass-split', 'tone' => 'warning'],
+        ['label' => 'Collected orders', 'value' => number_format($collected), 'hint' => 'Completed collections', 'icon' => 'bag-check', 'tone' => 'days'],
+    ];
+} elseif ($reportType === 'machine_fees') {
+    $sql = "SELECT DATE(m.paid_at) AS report_date, m.transaction_id, st.name AS store_name,
+                   m.payer_name, m.services, m.payment_method, m.amount
+            FROM machine_fee_payments m
+            JOIN stores st ON st.id = m.store_id
+            WHERE DATE(m.paid_at) BETWEEN :start AND :end";
+    $params = [':start' => $startDate, ':end' => $endDate];
+    if ($reportStoreRestricted && $assignedStoreId <= 0) $sql .= ' AND 1 = 0';
+    elseif ($storeId > 0) { $sql .= ' AND m.store_id = :store_id'; $params[':store_id'] = $storeId; }
+    $sql .= ' ORDER BY m.paid_at DESC, m.id DESC';
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    $results = $stmt->fetchAll();
+
+    $feeTotal = (float) array_sum(array_column($results, 'amount'));
+    $cashTotal = (float) array_sum(array_map(static fn($row) => $row['payment_method'] === 'cash' ? (float) $row['amount'] : 0, $results));
+    $activeDays = count(array_unique(array_column($results, 'report_date')));
+    foreach ($results as $row) { $chartLabels[] = $row['transaction_id']; $chartValues[] = (float) $row['amount']; }
+    $summaryCards = [
+        ['label' => 'Fees collected', 'value' => money($feeTotal), 'hint' => 'Selected period', 'icon' => 'cash-stack', 'tone' => 'revenue'],
+        ['label' => 'Payments', 'value' => number_format(count($results)), 'hint' => 'Registered fee payments', 'icon' => 'receipt', 'tone' => 'transactions'],
+        ['label' => 'Cash collected', 'value' => money($cashTotal), 'hint' => 'Cash payment method', 'icon' => 'wallet2', 'tone' => 'average'],
+        ['label' => 'Collection days', 'value' => number_format($activeDays), 'hint' => 'Days with payments', 'icon' => 'calendar-check', 'tone' => 'days'],
+    ];
+} elseif ($reportType === 'attendance') {
+    $sql = "SELECT u.full_name, st.name AS store_name, COUNT(a.id) AS days_present,
+                   SUM(a.clock_out IS NOT NULL) AS completed_days,
+                   COALESCE(SUM(CASE WHEN a.clock_out IS NOT NULL THEN TIMESTAMPDIFF(MINUTE, a.clock_in, a.clock_out) ELSE 0 END), 0) AS worked_minutes
+            FROM attendance a
+            JOIN users u ON u.id = a.user_id
+            LEFT JOIN stores st ON st.id = a.store_id
+            WHERE a.attendance_date BETWEEN :start AND :end";
+    $params = [':start' => $startDate, ':end' => $endDate];
+    if ($reportStoreRestricted && $assignedStoreId <= 0) $sql .= ' AND 1 = 0';
+    elseif ($storeId > 0) { $sql .= ' AND a.store_id = :store_id'; $params[':store_id'] = $storeId; }
+    $sql .= ' GROUP BY u.id, u.full_name, st.name ORDER BY days_present DESC, u.full_name';
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    $results = $stmt->fetchAll();
+
+    $attendanceDays = (int) array_sum(array_column($results, 'days_present'));
+    $completedDays = (int) array_sum(array_column($results, 'completed_days'));
+    $workedMinutes = (int) array_sum(array_column($results, 'worked_minutes'));
+    foreach ($results as $row) { $chartLabels[] = $row['full_name']; $chartValues[] = round((int) $row['worked_minutes'] / 60, 2); }
+    $summaryCards = [
+        ['label' => 'Staff recorded', 'value' => number_format(count($results)), 'hint' => 'Unique team members', 'icon' => 'people', 'tone' => 'revenue'],
+        ['label' => 'Attendance days', 'value' => number_format($attendanceDays), 'hint' => 'Total days present', 'icon' => 'calendar2-check', 'tone' => 'transactions'],
+        ['label' => 'Completed days', 'value' => number_format($completedDays), 'hint' => 'Shifts clocked out', 'icon' => 'check2-circle', 'tone' => 'average'],
+        ['label' => 'Worked time', 'value' => intdiv($workedMinutes, 60) . 'h ' . ($workedMinutes % 60) . 'm', 'hint' => 'Completed shifts', 'icon' => 'clock-history', 'tone' => 'days'],
+    ];
 } elseif ($reportType === 'low_stock') {
     $sql = "SELECT p.name, p.sku, c.name AS category, i.quantity, p.reorder_level,
                    GREATEST(p.reorder_level - i.quantity, 0) AS reorder_gap, s.name AS store_name
@@ -107,7 +196,8 @@ if ($reportType === 'sales_summary') {
             JOIN stores s ON s.id = i.store_id
             WHERE i.quantity <= p.reorder_level";
     $params = [];
-    if ($storeId > 0) { $sql .= ' AND i.store_id = :store_id'; $params[':store_id'] = $storeId; }
+    if ($reportStoreRestricted && $assignedStoreId <= 0) $sql .= ' AND 1 = 0';
+    elseif ($storeId > 0) { $sql .= ' AND i.store_id = :store_id'; $params[':store_id'] = $storeId; }
     $sql .= ' ORDER BY i.quantity ASC, p.name';
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
@@ -131,7 +221,8 @@ if ($reportType === 'sales_summary') {
             JOIN stores s ON s.id = i.store_id
             WHERE 1 = 1";
     $params = [];
-    if ($storeId > 0) { $sql .= ' AND i.store_id = :store_id'; $params[':store_id'] = $storeId; }
+    if ($reportStoreRestricted && $assignedStoreId <= 0) $sql .= ' AND 1 = 0';
+    elseif ($storeId > 0) { $sql .= ' AND i.store_id = :store_id'; $params[':store_id'] = $storeId; }
     $sql .= ' ORDER BY selling_value DESC, p.name';
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
@@ -169,7 +260,7 @@ require __DIR__ . '/includes/header.php';
   <div>
     <span class="report-overline"><i class="bi bi-bar-chart-line me-2"></i>Business intelligence</span>
     <h2>Turn daily activity into clear decisions.</h2>
-    <p>Explore sales performance, product demand, stock risks, and the selling value of inventory across every store.</p>
+    <p><?= $canViewAllStores ? 'Explore sales, customer deposits, service fees, attendance, product demand, and inventory health across your stores.' : 'Explore activity, product demand, and inventory health for your assigned store.' ?></p>
   </div>
   <?php if ($results): ?><a class="btn report-export-button" href="<?= e($exportUrl) ?>"><i class="bi bi-download me-2"></i>Export CSV</a><?php endif; ?>
 </section>
@@ -188,7 +279,7 @@ require __DIR__ . '/includes/header.php';
   <header><div><span class="report-section-label">Report controls</span><h3><?= e($reportMeta[$reportType]['label']) ?></h3></div><span class="report-scope"><i class="bi bi-geo-alt"></i><?= e($selectedStore) ?></span></header>
   <form method="GET" action="reports.php" class="report-filters">
     <div><label class="form-label" for="reportType">Report type</label><select class="form-select" name="report_type" id="reportType"><?php foreach ($reportMeta as $key => $meta): ?><option value="<?= e($key) ?>" <?= $reportType === $key ? 'selected' : '' ?>><?= e($meta['label']) ?></option><?php endforeach; ?></select></div>
-    <div><label class="form-label" for="reportStore">Store</label><select class="form-select" name="store_id" id="reportStore"><option value="0">All stores</option><?php foreach ($stores as $store): ?><option value="<?= (int) $store['id'] ?>" <?= $storeId === (int) $store['id'] ? 'selected' : '' ?>><?= e($store['name']) ?></option><?php endforeach; ?></select></div>
+    <div><label class="form-label" for="reportStore">Store</label><select class="form-select" name="store_id" id="reportStore" <?= $reportStoreRestricted ? 'disabled' : '' ?>><?php if (!$reportStoreRestricted): ?><option value="0">All stores</option><?php elseif (!$stores): ?><option value="0">No assigned store</option><?php endif; ?><?php foreach ($stores as $store): ?><option value="<?= (int) $store['id'] ?>" <?= $storeId === (int) $store['id'] ? 'selected' : '' ?>><?= e($store['name']) ?></option><?php endforeach; ?></select></div>
     <div class="report-date-field <?= $usesDateRange ? '' : 'is-disabled' ?>"><label class="form-label" for="reportStartDate">Start date</label><input type="date" class="form-control" name="start_date" id="reportStartDate" value="<?= e($startDate) ?>" <?= !$usesDateRange ? 'disabled' : '' ?>></div>
     <div class="report-date-field <?= $usesDateRange ? '' : 'is-disabled' ?>"><label class="form-label" for="reportEndDate">End date</label><input type="date" class="form-control" name="end_date" id="reportEndDate" value="<?= e($endDate) ?>" <?= !$usesDateRange ? 'disabled' : '' ?>></div>
     <button type="submit" class="btn report-run-button"><i class="bi bi-play-fill me-1"></i>Run report</button>
@@ -203,7 +294,7 @@ require __DIR__ . '/includes/header.php';
 
 <?php if ($chartLabels): ?>
 <section class="report-panel mb-4">
-  <header class="report-panel-header"><div><span class="report-section-label">Visual overview</span><h3><?= $reportType === 'sales_summary' ? 'Revenue trend' : 'Revenue by product' ?></h3></div><span class="report-period"><i class="bi bi-calendar3"></i><?= e(date('M j, Y', strtotime($startDate))) ?> – <?= e(date('M j, Y', strtotime($endDate))) ?></span></header>
+  <header class="report-panel-header"><div><span class="report-section-label">Visual overview</span><h3><?php if ($reportType === 'sales_summary'): ?>Revenue trend<?php elseif ($reportType === 'top_products'): ?>Revenue by product<?php elseif ($reportType === 'deposits'): ?>Payments by order<?php elseif ($reportType === 'machine_fees'): ?>Fees by transaction<?php else: ?>Hours by staff member<?php endif; ?></h3></div><span class="report-period"><i class="bi bi-calendar3"></i><?= e(date('M j, Y', strtotime($startDate))) ?> – <?= e(date('M j, Y', strtotime($endDate))) ?></span></header>
   <div class="report-chart-wrap"><canvas id="reportChart" aria-label="<?= e($reportMeta[$reportType]['label']) ?> chart" role="img"></canvas></div>
 </section>
 <?php endif; ?>
@@ -217,13 +308,22 @@ require __DIR__ . '/includes/header.php';
       <tbody><?php if (!$results): ?><tr><td colspan="5"><?php require __DIR__ . '/includes/report-empty.php'; ?></td></tr><?php else: foreach ($results as $row): $share = $totalRevenue > 0 ? ((float) $row['revenue'] / $totalRevenue) * 100 : 0; ?><tr><td><div class="report-date"><span><?= e(date('d', strtotime($row['report_date']))) ?></span><div><strong><?= e(date('M Y', strtotime($row['report_date']))) ?></strong><small><?= e(date('l', strtotime($row['report_date']))) ?></small></div></div></td><td><strong class="report-number"><?= number_format((int) $row['transaction_count']) ?></strong></td><td><strong class="report-money"><?= e(money($row['revenue'])) ?></strong></td><td><?= e(money($row['average_sale'])) ?></td><td><div class="report-share"><span style="width: <?= min(100, $share) ?>%"></span></div><small class="report-share-label"><?= number_format($share, 1) ?>%</small></td></tr><?php endforeach; endif; ?></tbody>
       <?php elseif ($reportType === 'top_products'): ?>
       <thead><tr><th>Rank</th><th>Product</th><th>Category</th><th>Pieces sold</th><th>Revenue</th></tr></thead>
-      <tbody><?php if (!$results): ?><tr><td colspan="5"><?php require __DIR__ . '/includes/report-empty.php'; ?></td></tr><?php else: foreach ($results as $index => $row): ?><tr><td><span class="report-rank <?= $index < 3 ? 'top' : '' ?>"><?= $index + 1 ?></span></td><td><div class="report-product"><strong><?= e($row['name']) ?></strong><small><?= e($row['sku']) ?></small></div></td><td><span class="report-category"><?= e($row['category']) ?></span></td><td><strong class="report-number"><?= number_format((int) $row['quantity_sold']) ?> pieces</strong></td><td><strong class="report-money"><?= e(money($row['revenue'])) ?></strong></td></tr><?php endforeach; endif; ?></tbody>
+      <tbody><?php if (!$results): ?><tr><td colspan="5"><?php require __DIR__ . '/includes/report-empty.php'; ?></td></tr><?php else: foreach ($results as $index => $row): ?><tr><td><span class="report-rank <?= $index < 3 ? 'top' : '' ?>"><?= $index + 1 ?></span></td><td><div class="report-product"><strong><?= e($row['name']) ?></strong><small><?= e($row['sku']) ?></small></div></td><td><span class="report-category"><?= e($row['category']) ?></span></td><td><strong class="report-number"><?= e(product_quantity_label($row['name'], (int) $row['quantity_sold'])) ?></strong></td><td><strong class="report-money"><?= e(money($row['revenue'])) ?></strong></td></tr><?php endforeach; endif; ?></tbody>
+      <?php elseif ($reportType === 'deposits'): ?>
+      <thead><tr><th>Order</th><th>Date</th><th>Customer</th><th>Store</th><th>Order value</th><th>Paid</th><th>Balance</th><th>Status</th></tr></thead>
+      <tbody><?php if (!$results): ?><tr><td colspan="8"><?php require __DIR__ . '/includes/report-empty.php'; ?></td></tr><?php else: foreach ($results as $row): ?><tr><td><strong class="report-number"><?= e($row['deposit_number']) ?></strong></td><td><?= e(date('M j, Y', strtotime($row['report_date']))) ?></td><td><?= e($row['customer_name']) ?></td><td><span class="report-store"><i class="bi bi-shop"></i><?= e($row['store_name']) ?></span></td><td><?= e(money($row['total_amount'])) ?></td><td><strong class="report-money"><?= e(money($row['paid_amount'])) ?></strong></td><td><?= e(money($row['balance_amount'])) ?></td><td><span class="report-category"><?= e(ucfirst($row['status'])) ?></span></td></tr><?php endforeach; endif; ?></tbody>
+      <?php elseif ($reportType === 'machine_fees'): ?>
+      <thead><tr><th>Transaction</th><th>Date</th><th>Payer</th><th>Store</th><th>Services</th><th>Method</th><th>Amount</th></tr></thead>
+      <tbody><?php if (!$results): ?><tr><td colspan="7"><?php require __DIR__ . '/includes/report-empty.php'; ?></td></tr><?php else: foreach ($results as $row): ?><tr><td><strong class="report-number"><?= e($row['transaction_id']) ?></strong></td><td><?= e(date('M j, Y', strtotime($row['report_date']))) ?></td><td><?= e($row['payer_name']) ?></td><td><span class="report-store"><i class="bi bi-shop"></i><?= e($row['store_name']) ?></span></td><td><?= e($row['services']) ?></td><td><span class="report-category"><?= e(ucwords(str_replace('_', ' ', $row['payment_method']))) ?></span></td><td><strong class="report-money"><?= e(money($row['amount'])) ?></strong></td></tr><?php endforeach; endif; ?></tbody>
+      <?php elseif ($reportType === 'attendance'): ?>
+      <thead><tr><th>Staff member</th><th>Store</th><th>Days present</th><th>Completed days</th><th>Total hours</th></tr></thead>
+      <tbody><?php if (!$results): ?><tr><td colspan="5"><?php require __DIR__ . '/includes/report-empty.php'; ?></td></tr><?php else: foreach ($results as $row): $minutes = (int) $row['worked_minutes']; ?><tr><td><strong class="report-number"><?= e($row['full_name']) ?></strong></td><td><span class="report-store"><i class="bi bi-shop"></i><?= e($row['store_name'] ?: 'Head office') ?></span></td><td><?= number_format((int) $row['days_present']) ?></td><td><?= number_format((int) $row['completed_days']) ?></td><td><strong class="report-money"><?= intdiv($minutes, 60) ?>h <?= $minutes % 60 ?>m</strong></td></tr><?php endforeach; endif; ?></tbody>
       <?php elseif ($reportType === 'low_stock'): ?>
       <thead><tr><th>Product</th><th>Store</th><th>Category</th><th>Available</th><th>Reorder level</th><th>Shortfall</th></tr></thead>
-      <tbody><?php if (!$results): ?><tr><td colspan="6"><?php require __DIR__ . '/includes/report-empty.php'; ?></td></tr><?php else: foreach ($results as $row): ?><tr><td><div class="report-product"><strong><?= e($row['name']) ?></strong><small><?= e($row['sku']) ?></small></div></td><td><span class="report-store"><i class="bi bi-shop"></i><?= e($row['store_name']) ?></span></td><td><span class="report-category"><?= e($row['category']) ?></span></td><td><span class="report-stock-level <?= (int) $row['quantity'] === 0 ? 'empty' : 'low' ?>"><?= number_format((int) $row['quantity']) ?> pieces</span></td><td><?= number_format((int) $row['reorder_level']) ?> pieces</td><td><strong class="report-shortfall">+<?= number_format((int) $row['reorder_gap']) ?></strong></td></tr><?php endforeach; endif; ?></tbody>
+      <tbody><?php if (!$results): ?><tr><td colspan="6"><?php require __DIR__ . '/includes/report-empty.php'; ?></td></tr><?php else: foreach ($results as $row): ?><tr><td><div class="report-product"><strong><?= e($row['name']) ?></strong><small><?= e($row['sku']) ?></small></div></td><td><span class="report-store"><i class="bi bi-shop"></i><?= e($row['store_name']) ?></span></td><td><span class="report-category"><?= e($row['category']) ?></span></td><td><span class="report-stock-level <?= (int) $row['quantity'] === 0 ? 'empty' : 'low' ?>"><?= e(product_quantity_label($row['name'], (int) $row['quantity'])) ?></span></td><td><?= e(product_quantity_label($row['name'], (int) $row['reorder_level'])) ?></td><td><strong class="report-shortfall">+<?= e(product_quantity_label($row['name'], (int) $row['reorder_gap'])) ?></strong></td></tr><?php endforeach; endif; ?></tbody>
       <?php else: ?>
       <thead><tr><th>Product</th><th>Store</th><th>Category</th><th>Quantity</th><th>Selling price</th><th>Selling value</th></tr></thead>
-      <tbody><?php if (!$results): ?><tr><td colspan="6"><?php require __DIR__ . '/includes/report-empty.php'; ?></td></tr><?php else: foreach ($results as $row): ?><tr><td><div class="report-product"><strong><?= e($row['name']) ?></strong><small><?= e($row['sku']) ?></small></div></td><td><span class="report-store"><i class="bi bi-shop"></i><?= e($row['store_name']) ?></span></td><td><span class="report-category"><?= e($row['category']) ?></span></td><td><strong class="report-number"><?= number_format((int) $row['quantity']) ?></strong></td><td><?= e(money($row['selling_price'])) ?></td><td><strong class="report-money"><?= e(money($row['selling_value'])) ?></strong></td></tr><?php endforeach; endif; ?></tbody>
+      <tbody><?php if (!$results): ?><tr><td colspan="6"><?php require __DIR__ . '/includes/report-empty.php'; ?></td></tr><?php else: foreach ($results as $row): ?><tr><td><div class="report-product"><strong><?= e($row['name']) ?></strong><small><?= e($row['sku']) ?></small></div></td><td><span class="report-store"><i class="bi bi-shop"></i><?= e($row['store_name']) ?></span></td><td><span class="report-category"><?= e($row['category']) ?></span></td><td><strong class="report-number"><?= e(product_quantity_label($row['name'], (int) $row['quantity'])) ?></strong></td><td><?= e(money($row['selling_price'])) ?></td><td><strong class="report-money"><?= e(money($row['selling_value'])) ?></strong></td></tr><?php endforeach; endif; ?></tbody>
       <?php endif; ?>
     </table>
   </div>
@@ -235,6 +335,8 @@ if ($chartLabels) {
     $safeValues = json_encode($chartValues, JSON_NUMERIC_CHECK);
     $safeCurrency = json_encode(CURRENCY_SYMBOL, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
     $chartType = $reportType === 'sales_summary' ? 'line' : 'bar';
+    $chartPrefix = $reportType === 'attendance' ? '""' : $safeCurrency . ' + " "';
+    $chartSuffix = $reportType === 'attendance' ? ' + " hours"' : '';
     $extraScripts = '<script>
     (function () {
       const canvas = document.getElementById("reportChart");
@@ -242,7 +344,7 @@ if ($chartLabels) {
       new Chart(canvas.getContext("2d"), {
         type: "' . $chartType . '",
         data: { labels: ' . $safeLabels . ', datasets: [{ data: ' . $safeValues . ', borderColor: "#167003", backgroundColor: "rgba(22, 112, 3, 0.14)", borderWidth: 2, borderRadius: 6, pointBackgroundColor: "#167003", pointRadius: 3, fill: ' . ($chartType === 'line' ? 'true' : 'false') . ', tension: 0.32 }] },
-        options: { responsive: true, maintainAspectRatio: false, interaction: { intersect: false, mode: "index" }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: function (context) { return ' . $safeCurrency . ' + " " + Number(context.raw).toLocaleString(); } } } }, scales: { x: { grid: { display: false }, ticks: { color: "#7c847e", maxRotation: 35 } }, y: { beginAtZero: true, grid: { color: "rgba(90, 110, 94, 0.08)" }, ticks: { color: "#7c847e", callback: function (value) { return ' . $safeCurrency . ' + " " + Number(value).toLocaleString(); } } } } }
+        options: { responsive: true, maintainAspectRatio: false, interaction: { intersect: false, mode: "index" }, plugins: { legend: { display: false }, tooltip: { callbacks: { label: function (context) { return ' . $chartPrefix . ' + Number(context.raw).toLocaleString()' . $chartSuffix . '; } } } }, scales: { x: { grid: { display: false }, ticks: { color: "#7c847e", maxRotation: 35 } }, y: { beginAtZero: true, grid: { color: "rgba(90, 110, 94, 0.08)" }, ticks: { color: "#7c847e", callback: function (value) { return ' . $chartPrefix . ' + Number(value).toLocaleString()' . $chartSuffix . '; } } } } }
       });
     })();
     </script>';

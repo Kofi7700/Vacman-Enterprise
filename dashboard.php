@@ -3,19 +3,25 @@ require_once __DIR__ . '/config/config.php';
 require_login();
 
 $pdo = db();
-$miniManagerStoreId = is_role('mini_manager') && !is_role('admin', 'manager', 'warehouse') ? (int) (current_user()['store_id'] ?? 0) : 0;
-$isInventoryStoreScoped = is_role('mini_manager', 'sales_clerk') && !is_role('admin', 'manager', 'warehouse');
-$inventoryViewerStoreId = $isInventoryStoreScoped ? (int) (current_user()['store_id'] ?? 0) : 0;
-$inventoryStoreScope = $isInventoryStoreScoped ? ' AND i.store_id = ' . $inventoryViewerStoreId : '';
-$salesStoreScope = $miniManagerStoreId > 0 ? ' AND store_id = ' . $miniManagerStoreId : '';
+$canViewAllStores = can_view_all_stores();
+$assignedStoreId = $canViewAllStores ? 0 : assigned_store_id();
+$inventoryStoreScope = !$canViewAllStores
+    ? ($assignedStoreId > 0 ? ' AND i.store_id = ' . $assignedStoreId : ' AND 1 = 0')
+    : '';
+$salesStoreScope = !$canViewAllStores
+    ? ($assignedStoreId > 0 ? ' AND store_id = ' . $assignedStoreId : ' AND 1 = 0')
+    : '';
 $canViewMachineFees = is_role('admin', 'manager', 'cashier');
-$machineFeeStoreId = is_role('cashier') && !is_role('admin', 'manager') ? (int) (current_user()['store_id'] ?? 0) : 0;
-$machineFeeStoreScope = is_role('cashier') && !is_role('admin', 'manager')
-    ? ($machineFeeStoreId > 0 ? ' AND store_id = ' . $machineFeeStoreId : ' AND 1 = 0')
+$canAccessSales = is_role('admin', 'manager', 'mini_manager', 'cashier', 'sales_clerk');
+$machineFeeStoreScope = !$canViewAllStores
+    ? ($assignedStoreId > 0 ? ' AND store_id = ' . $assignedStoreId : ' AND 1 = 0')
     : '';
 
 // ---- Key metrics ------------------------------------------------------
-$totalProducts = (int) $pdo->query("SELECT COUNT(*) FROM products WHERE status = 'active'")->fetchColumn();
+$totalProductSql = "SELECT COUNT(DISTINCT p.id) FROM products p";
+if (!$canViewAllStores) $totalProductSql .= ' JOIN inventory i ON i.product_id = p.id';
+$totalProductSql .= " WHERE p.status = 'active'" . (!$canViewAllStores ? ($assignedStoreId > 0 ? ' AND i.store_id = ' . $assignedStoreId : ' AND 1 = 0') : '');
+$totalProducts = (int) $pdo->query($totalProductSql)->fetchColumn();
 
 $lowStockItems = $pdo->query("
     SELECT p.id, p.name, c.name AS category, i.quantity, p.reorder_level, s.name AS store_name
@@ -40,7 +46,9 @@ $monthlySales = (float) $pdo->query("
     WHERE payment_status = 'approved' AND MONTH(sale_date) = MONTH(CURDATE()) AND YEAR(sale_date) = YEAR(CURDATE())" . $salesStoreScope . "
 ")->fetchColumn();
 
-$transferStoreScope = $miniManagerStoreId > 0 ? ' AND (from_store_id = ' . $miniManagerStoreId . ' OR to_store_id = ' . $miniManagerStoreId . ')' : '';
+$transferStoreScope = !$canViewAllStores
+    ? ($assignedStoreId > 0 ? ' AND (from_store_id = ' . $assignedStoreId . ' OR to_store_id = ' . $assignedStoreId . ')' : ' AND 1 = 0')
+    : '';
 $pendingTransfers = (int) $pdo->query("SELECT COUNT(*) FROM transfers WHERE status IN ('pending','approved','in_transit')" . $transferStoreScope)->fetchColumn();
 
 $dailyMachineFeeAmount = 0.0;
@@ -60,7 +68,7 @@ $stockByCategory = $pdo->query("
     FROM categories c
     LEFT JOIN products p ON p.category_id = c.id
     LEFT JOIN inventory i ON i.product_id = p.id
-    " . ($isInventoryStoreScoped ? 'WHERE i.store_id = ' . $inventoryViewerStoreId : '') . "
+    " . (!$canViewAllStores ? ($assignedStoreId > 0 ? 'WHERE i.store_id = ' . $assignedStoreId : 'WHERE 1 = 0') : '') . "
     GROUP BY c.id, c.name
     ORDER BY c.name
 ")->fetchAll();
@@ -71,7 +79,7 @@ $topSelling = $pdo->query("
     JOIN sales s ON s.id = si.sale_id
     JOIN products p ON p.id = si.product_id
     JOIN categories c ON c.id = p.category_id
-    WHERE s.payment_status = 'approved' AND MONTH(s.sale_date) = MONTH(CURDATE()) AND YEAR(s.sale_date) = YEAR(CURDATE())" . ($miniManagerStoreId > 0 ? ' AND s.store_id = ' . $miniManagerStoreId : '') . "
+    WHERE s.payment_status = 'approved' AND MONTH(s.sale_date) = MONTH(CURDATE()) AND YEAR(s.sale_date) = YEAR(CURDATE())" . (!$canViewAllStores ? ($assignedStoreId > 0 ? ' AND s.store_id = ' . $assignedStoreId : ' AND 1 = 0') : '') . "
     GROUP BY p.id, p.name, c.name
     ORDER BY qty_sold DESC
     LIMIT 5
@@ -81,7 +89,7 @@ $recentPurchases = $pdo->query("
     SELECT pu.id, pu.quantity, pu.status, pu.purchase_date, pu.supplier_name, p.name AS product_name
     FROM purchases pu
     JOIN products p ON p.id = pu.product_id
-    " . ($miniManagerStoreId > 0 ? 'WHERE pu.store_id = ' . $miniManagerStoreId : '') . "
+    " . (!$canViewAllStores ? ($assignedStoreId > 0 ? 'WHERE pu.store_id = ' . $assignedStoreId : 'WHERE 1 = 0') : '') . "
     ORDER BY pu.created_at DESC
     LIMIT 5
 ")->fetchAll();
@@ -92,7 +100,7 @@ $todaySales = $pdo->query("
     FROM sales s
     LEFT JOIN sale_items si ON si.sale_id = s.id
     LEFT JOIN products p ON p.id = si.product_id
-    WHERE s.payment_status = 'approved' AND DATE(s.sale_date) = CURDATE()" . ($miniManagerStoreId > 0 ? ' AND s.store_id = ' . $miniManagerStoreId : '') . "
+    WHERE s.payment_status = 'approved' AND DATE(s.sale_date) = CURDATE()" . (!$canViewAllStores ? ($assignedStoreId > 0 ? ' AND s.store_id = ' . $assignedStoreId : ' AND 1 = 0') : '') . "
     GROUP BY s.id
     ORDER BY s.sale_date DESC
     LIMIT 8
@@ -118,7 +126,7 @@ require __DIR__ . '/includes/header.php';
   <div class="dashboard-welcome-copy">
     <span class="dashboard-overline"><i class="bi bi-grid-1x2-fill me-2"></i>Operations overview</span>
     <h2>Welcome, <?= e($firstName) ?>.</h2>
-    <p>Here is what is happening across your inventory today.</p>
+    <p><?= $canViewAllStores ? 'Here is what is happening across your inventory today.' : 'Here is what is happening in your assigned store today.' ?></p>
     <div class="dashboard-date"><i class="bi bi-calendar3 me-2"></i><?= e(date('l, F j, Y')) ?></div>
   </div>
   <div class="dashboard-welcome-actions">
@@ -150,15 +158,15 @@ require __DIR__ . '/includes/header.php';
     <i class="bi bi-arrow-up-right dashboard-kpi-arrow"></i>
   </a>
 
-  <a href="sales.php" class="dashboard-kpi dashboard-kpi-sales">
+  <?php if ($canAccessSales): ?><a href="sales.php" class="dashboard-kpi dashboard-kpi-sales"><?php else: ?><div class="dashboard-kpi dashboard-kpi-sales"><?php endif; ?>
     <span class="dashboard-kpi-icon"><i class="bi bi-graph-up-arrow"></i></span>
     <span class="dashboard-kpi-content">
       <span class="dashboard-kpi-label">Sales this month</span>
       <strong><?= e(money($monthlySales)) ?></strong>
       <small><?= e(date('F Y')) ?> revenue</small>
     </span>
-    <i class="bi bi-arrow-up-right dashboard-kpi-arrow"></i>
-  </a>
+    <?php if ($canAccessSales): ?><i class="bi bi-arrow-up-right dashboard-kpi-arrow"></i><?php endif; ?>
+  <?php if ($canAccessSales): ?></a><?php else: ?></div><?php endif; ?>
 
   <a href="transfers.php" class="dashboard-kpi dashboard-kpi-transfers">
     <span class="dashboard-kpi-icon"><i class="bi bi-arrow-left-right"></i></span>
@@ -225,7 +233,7 @@ require __DIR__ . '/includes/header.php';
           <div class="dashboard-rank-content">
             <div class="d-flex justify-content-between gap-3">
               <div class="text-truncate"><strong><?= e($item['name']) ?></strong><small><?= e($item['category']) ?></small></div>
-              <span class="dashboard-rank-value"><?= (int) $item['qty_sold'] ?> pieces sold</span>
+              <span class="dashboard-rank-value"><?= e(product_quantity_label($item['name'], (int) $item['qty_sold'])) ?> sold</span>
             </div>
             <div class="dashboard-rank-bar"><span style="width: <?= $salesPercent ?>%"></span></div>
           </div>
@@ -257,7 +265,7 @@ require __DIR__ . '/includes/header.php';
           <td><div class="dashboard-product-name"><span><?= e(strtoupper(substr($item['name'], 0, 1))) ?></span><strong><?= e($item['name']) ?></strong></div></td>
           <td><span class="product-category <?= category_css_class($item['category']) ?>"><?= e($item['category']) ?></span></td>
           <td><i class="bi bi-shop me-2 text-muted"></i><?= e($item['store_name']) ?></td>
-          <td><span class="dashboard-stock-count"><?= (int) $item['quantity'] ?> pieces</span></td>
+          <td><span class="dashboard-stock-count"><?= e(product_quantity_label($item['name'], (int) $item['quantity'])) ?></span></td>
           <td><?= (int) $item['reorder_level'] ?> pieces</td>
           <td class="text-end"><a href="purchases.php?product_id=<?= (int) $item['id'] ?>" class="btn dashboard-reorder-button">Reorder <i class="bi bi-arrow-right ms-1"></i></a></td>
         </tr>
@@ -284,7 +292,7 @@ require __DIR__ . '/includes/header.php';
         <div class="dashboard-activity-item">
           <span class="dashboard-activity-icon purchase"><i class="bi bi-truck"></i></span>
           <div class="dashboard-activity-copy">
-            <strong><?= (int) $purchase['quantity'] ?> pieces × <?= e($purchase['product_name']) ?></strong>
+            <strong><?= e(product_quantity_label($purchase['product_name'], (int) $purchase['quantity'])) ?> × <?= e($purchase['product_name']) ?></strong>
             <span><?= e($purchase['supplier_name']) ?> · <?= e(date('M j, Y', strtotime($purchase['purchase_date']))) ?></span>
           </div>
           <span class="dashboard-status status-<?= e($purchase['status']) ?>"><?= e(ucfirst($purchase['status'])) ?></span>
@@ -301,7 +309,7 @@ require __DIR__ . '/includes/header.php';
           <span class="dashboard-section-label">Live activity</span>
           <h3>Today's sales</h3>
         </div>
-        <a href="sales.php" class="dashboard-text-link">View all <i class="bi bi-arrow-right"></i></a>
+        <?php if ($canAccessSales): ?><a href="sales.php" class="dashboard-text-link">View all <i class="bi bi-arrow-right"></i></a><?php endif; ?>
       </header>
       <div class="dashboard-activity-list">
         <?php if (empty($todaySales)): ?>

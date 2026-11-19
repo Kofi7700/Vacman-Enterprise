@@ -48,6 +48,134 @@ function money($amount): string
     return CURRENCY_SYMBOL . number_format((float) $amount, 2);
 }
 
+/** Match the exact 2*6 Essa product, allowing common multiplication symbols. */
+function is_essa_2_by_6(?string $productName): bool
+{
+    return (bool) preg_match('/^2\s*[x*×]\s*6\s+Essa$/iu', trim($productName ?? ''));
+}
+
+/** Match the exact 2*8 Wood B/C product, allowing common multiplication symbols. */
+function is_wood_bc_2_by_8(?string $productName): bool
+{
+    return (bool) preg_match('/^2\s*[x*×]\s*8\s+Wood\s+B\s*\/\s*C$/iu', trim($productName ?? ''));
+}
+
+/** Match the exact 2*8 Otie product, allowing common multiplication symbols. */
+function is_otie_2_by_8(?string $productName): bool
+{
+    return (bool) preg_match('/^2\s*[x*×]\s*8\s+Otie$/iu', trim($productName ?? ''));
+}
+
+/** Match the exact 2*8 Ceiba product, allowing common multiplication symbols. */
+function is_ceiba_2_by_8(?string $productName): bool
+{
+    return (bool) preg_match('/^2\s*[x*×]\s*8\s+Ceiba$/iu', trim($productName ?? ''));
+}
+
+/** All sheet and Alluzinc products use the roofing bundle conversion. */
+function is_roofing_sheet(?string $productName): bool
+{
+    return (bool) preg_match('/\b(sheet|alluzinc)\b/iu', trim($productName ?? ''));
+}
+
+/** Return the number of pieces in a louvre-glass box for supported glass sizes. */
+function louvre_glass_box_size(?string $productName): ?int
+{
+    $name = trim($productName ?? '');
+    if (!preg_match('/\blouvre\s+glass\b/iu', $name)) return null;
+    if (preg_match('/\b24\s*(?:"|inch(?:es)?)/iu', $name)) return 40;
+    if (preg_match('/\b30\s*(?:"|inch(?:es)?)/iu', $name)) return 32;
+    if (preg_match('/\b36\s*(?:"|inch(?:es)?)/iu', $name)) return 27;
+    return null;
+}
+
+/** Every louvre frame, regardless of blade count, is packed 10 pieces per box. */
+function is_louvre_frame(?string $productName): bool
+{
+    return (bool) preg_match('/\blouvre\s+frame\b/iu', trim($productName ?? ''));
+}
+
+/** Return the scaled dimensional equivalents for supported products. */
+function product_dimensional_equivalence(?string $productName, int $pieces): ?string
+{
+    if ($pieces < 1) return null;
+
+    if (is_essa_2_by_6($productName)) {
+        return number_format($pieces * 3) . ' × 2*2 Essa or '
+            . number_format($pieces) . ' × 2*2 Essa + ' . number_format($pieces) . ' × 2*4 Essa';
+    }
+
+    if (is_wood_bc_2_by_8($productName)) {
+        return number_format($pieces * 4) . ' × 2*2 Wood B/C or '
+            . number_format($pieces * 2) . ' × 2*2 Wood B/C + ' . number_format($pieces) . ' × 2*4 Wood B/C or '
+            . number_format($pieces * 2) . ' × 2*4 Wood B/C';
+    }
+
+    if (is_otie_2_by_8($productName)) {
+        return number_format($pieces * 4) . ' × 2*2 Otie or '
+            . number_format($pieces * 2) . ' × 2*2 Otie + ' . number_format($pieces) . ' × 2*4 Otie or '
+            . number_format($pieces * 2) . ' × 2*4 Otie';
+    }
+
+    if (is_ceiba_2_by_8($productName)) {
+        return number_format($pieces * 2) . ' × 2*4 Ceiba';
+    }
+
+    return null;
+}
+
+function has_product_dimensional_conversion(?string $productName): bool
+{
+    return product_dimensional_equivalence($productName, 1) !== null
+        || is_roofing_sheet($productName)
+        || louvre_glass_box_size($productName) !== null
+        || is_louvre_frame($productName);
+}
+
+/** Return the short conversion note shown when a supported product is selected. */
+function product_conversion_note(?string $productName): ?string
+{
+    if (is_roofing_sheet($productName)) return '20 pieces = 1 bundle';
+    $boxSize = louvre_glass_box_size($productName);
+    if ($boxSize !== null) return number_format($boxSize) . ' pieces = 1 box';
+    if (is_louvre_frame($productName)) return '10 pieces = 1 box';
+    $equivalence = product_dimensional_equivalence($productName, 1);
+    return $equivalence !== null ? '1 piece = ' . $equivalence : null;
+}
+
+/** Format a product quantity while retaining the exact underlying piece count. */
+function product_quantity_label(?string $productName, int $pieces, bool $showExactPieces = true): string
+{
+    $pieceLabel = number_format($pieces) . ' ' . ($pieces === 1 ? 'piece' : 'pieces');
+    $equivalence = product_dimensional_equivalence($productName, $pieces);
+    if ($equivalence !== null) {
+        return $showExactPieces ? $pieceLabel . ' (' . $equivalence . ')' : $equivalence;
+    }
+
+    $boxSize = louvre_glass_box_size($productName);
+    if ($boxSize === null && is_louvre_frame($productName)) $boxSize = 10;
+    if ($boxSize !== null && $pieces >= $boxSize) {
+        $boxes = intdiv($pieces, $boxSize);
+        $remainder = $pieces % $boxSize;
+        $boxLabel = number_format($boxes) . ' ' . ($boxes === 1 ? 'box' : 'boxes');
+        if ($remainder > 0) {
+            $boxLabel .= ' + ' . number_format($remainder) . ' ' . ($remainder === 1 ? 'piece' : 'pieces');
+        }
+        return $showExactPieces ? $boxLabel . ' (' . $pieceLabel . ')' : $boxLabel;
+    }
+
+    if (!is_roofing_sheet($productName) || $pieces < 20) return $pieceLabel;
+
+    $bundles = intdiv($pieces, 20);
+    $remainder = $pieces % 20;
+    $bundleLabel = number_format($bundles) . ' ' . ($bundles === 1 ? 'bundle' : 'bundles');
+    if ($remainder > 0) {
+        $bundleLabel .= ' + ' . number_format($remainder) . ' ' . ($remainder === 1 ? 'piece' : 'pieces');
+    }
+
+    return $showExactPieces ? $bundleLabel . ' (' . $pieceLabel . ')' : $bundleLabel;
+}
+
 /** Re-populate a form field from a previous POST (for validation redisplay). */
 function old(array $source, string $key, string $default = ''): string
 {

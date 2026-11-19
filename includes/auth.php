@@ -26,6 +26,18 @@ function is_role(string ...$roles): bool
     return (bool) array_intersect($roles, $assignedRoles);
 }
 
+/** Administrators and managers are the only roles allowed to see every store. */
+function can_view_all_stores(): bool
+{
+    return is_role('admin', 'manager');
+}
+
+/** The store currently assigned to the logged-in account, or zero when unassigned. */
+function assigned_store_id(): int
+{
+    return (int) (current_user()['store_id'] ?? 0);
+}
+
 /** Call at the top of any page that requires a logged-in user. */
 function require_login(): void
 {

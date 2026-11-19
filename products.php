@@ -4,8 +4,8 @@ require_login();
 
 $pdo = db();
 $canManage = is_role('admin', 'warehouse');
-$canViewAllStores = is_role('admin', 'warehouse', 'manager');
-$assignedStoreId = $canViewAllStores ? 0 : (int) (current_user()['store_id'] ?? 0);
+$canViewAllStores = can_view_all_stores();
+$assignedStoreId = $canViewAllStores ? 0 : assigned_store_id();
 
 // ---- Handle Add Product -----------------------------------------------
 if (is_post() && isset($_POST['add_product'])) {
@@ -34,6 +34,9 @@ if (is_post() && isset($_POST['add_product'])) {
     }
 
     $storeId = (int) ($_POST['store_id'] ?? 0);
+    if (!$canViewAllStores && ($assignedStoreId <= 0 || $storeId !== $assignedStoreId)) {
+        $errors[] = 'You can add products only to your assigned store.';
+    }
     if (empty($errors)) {
         $storeStmt = $pdo->prepare("SELECT id, name FROM stores WHERE id = ? AND status = 'active'");
         $storeStmt->execute([$storeId]);
@@ -122,6 +125,9 @@ if (is_post() && isset($_POST['edit_product'])) {
     $reorderLevel = (int) ($_POST['reorder_level'] ?? 0);
     $storeId = (int) ($_POST['store_id'] ?? 0);
     $stock = (int) ($_POST['stock'] ?? 0);
+    if (!$canViewAllStores && ($assignedStoreId <= 0 || $storeId !== $assignedStoreId)) {
+        $errors[] = 'You can update products only in your assigned store.';
+    }
     if ($id <= 0) {
         $errors[] = 'Invalid product.';
     }
@@ -228,7 +234,9 @@ if (is_post() && request_method() === 'DELETE') {
 
 // ---- Data for the page ------------------------------------------------
 $categories = $pdo->query('SELECT id, name FROM categories ORDER BY name')->fetchAll();
-$stores = $pdo->query("SELECT id, name FROM stores WHERE status = 'active' ORDER BY name")->fetchAll();
+$storeSql = "SELECT id, name FROM stores WHERE status = 'active'";
+if (!$canViewAllStores) $storeSql .= ' AND id = ' . $assignedStoreId;
+$stores = $pdo->query($storeSql . ' ORDER BY name')->fetchAll();
 
 $search = trim($_GET['q'] ?? '');
 $categoryFilter = (int) ($_GET['category_id'] ?? 0);
@@ -270,10 +278,11 @@ $inventoryByProduct = [];
 if ($canManage && $products) {
     $productIds = array_values(array_unique(array_map('intval', array_column($products, 'id'))));
     $placeholders = implode(',', array_fill(0, count($productIds), '?'));
-    $inventoryStmt = $pdo->prepare(
-        "SELECT product_id, store_id, quantity FROM inventory WHERE product_id IN ($placeholders) ORDER BY store_id"
-    );
-    $inventoryStmt->execute($productIds);
+    $inventorySql = "SELECT product_id, store_id, quantity FROM inventory WHERE product_id IN ($placeholders)";
+    $inventoryParams = $productIds;
+    if (!$canViewAllStores) { $inventorySql .= ' AND store_id = ?'; $inventoryParams[] = $assignedStoreId; }
+    $inventoryStmt = $pdo->prepare($inventorySql . ' ORDER BY store_id');
+    $inventoryStmt->execute($inventoryParams);
     foreach ($inventoryStmt->fetchAll() as $inventoryRow) {
         $inventoryByProduct[(int) $inventoryRow['product_id']][(int) $inventoryRow['store_id']] = (int) $inventoryRow['quantity'];
     }
@@ -419,7 +428,7 @@ require __DIR__ . '/includes/header.php';
             <td class="fw-semibold"><?= e(money($product['unit_price'])) ?> / piece</td>
             <td>
               <span class="stock-pill <?= $isLowStock ? 'stock-low' : 'stock-ok' ?>">
-                <?= (int) $product['total_stock'] ?> pieces
+                <?= e(product_quantity_label($product['name'], (int) $product['total_stock'])) ?>
               </span>
             </td>
             <td><span class="status-dot status-<?= e($product['status']) ?>"></span><?= e(ucwords(str_replace('_', ' ', $product['status']))) ?></td>
@@ -517,6 +526,7 @@ $editRowId = (int) $product['inventory_id'];
                 <input type="number" min="0" class="form-control" name="stock" id="editStock<?= $editRowId ?>" value="<?= $productInventory[$selectedStoreId] ?? 0 ?>" required>
                 <span class="input-group-text">pieces</span>
               </div>
+              <div class="form-text">Timber, roofing-sheet bundle, and louvre glass/frame box conversions apply automatically.</div>
             </div>
             <div class="col-12">
               <label class="form-label">Description <span class="text-muted fw-normal">(optional)</span></label>
@@ -598,6 +608,7 @@ $editRowId = (int) $product['inventory_id'];
                 <input type="number" min="0" class="form-control" name="opening_stock" value="0" required>
                 <span class="input-group-text">pieces</span>
               </div>
+              <div class="form-text">Timber, roofing-sheet bundle, and louvre glass/frame box conversions apply automatically.</div>
             </div>
             <div class="col-md-6">
               <label class="form-label">Selling price per piece (<?= e(CURRENCY_SYMBOL) ?>)</label>

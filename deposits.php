@@ -3,8 +3,9 @@ require_once __DIR__ . '/config/config.php';
 require_role('admin', 'manager', 'mini_manager', 'cashier', 'sales_clerk');
 
 $pdo = db();
-$canViewAllStores = is_role('admin', 'manager');
-$assignedStoreId = $canViewAllStores ? 0 : (int) (current_user()['store_id'] ?? 0);
+$canViewAllStores = can_view_all_stores();
+$canApproveCollection = is_role('admin', 'manager');
+$assignedStoreId = $canViewAllStores ? 0 : assigned_store_id();
 $methods = ['cash' => 'Cash', 'mobile_money' => 'Mobile money', 'card' => 'Card', 'bank_transfer' => 'Bank transfer', 'cheque' => 'Cheque'];
 
 function require_deposit_store_access(array $deposit, bool $canViewAllStores, int $assignedStoreId): void
@@ -50,11 +51,11 @@ if (is_post() && isset($_POST['create_deposit'])) {
             if (!$storeStmt->fetchColumn()) throw new RuntimeException('Select an active store.');
 
             ksort($lines);
-            $itemStmt = $pdo->prepare('SELECT p.id, p.name, p.unit_price FROM products p WHERE p.id = ? AND p.status = "active"');
+            $itemStmt = $pdo->prepare('SELECT p.id, p.name, p.unit_price FROM products p JOIN inventory i ON i.product_id = p.id AND i.store_id = ? WHERE p.id = ? AND p.status = "active"');
             $items = [];
             $total = 0.0;
             foreach ($lines as $productId => $quantity) {
-                $itemStmt->execute([$productId]);
+                $itemStmt->execute([$storeId, $productId]);
                 $product = $itemStmt->fetch();
                 if (!$product) throw new RuntimeException('One of the selected products is unavailable.');
                 $subtotal = round((float) $product['unit_price'] * $quantity, 2);
@@ -134,6 +135,7 @@ if (is_post() && isset($_POST['add_payment'])) {
 
 // Collection is the only point at which stock moves and a sale is created.
 if (is_post() && isset($_POST['collect_deposit'])) {
+    require_role('admin', 'manager');
     verify_csrf();
     $depositId = (int) ($_POST['deposit_id'] ?? 0);
     try {
@@ -217,7 +219,11 @@ if (is_post() && isset($_POST['delete_deposit'])) {
 // Data and filters.
 $storeSql = "SELECT id, name FROM stores WHERE status = 'active'" . (!$canViewAllStores ? ' AND id = ' . $assignedStoreId : '') . ' ORDER BY name';
 $stores = $pdo->query($storeSql)->fetchAll();
-$products = $pdo->query("SELECT id, name, sku, unit_price FROM products WHERE status = 'active' ORDER BY name")->fetchAll();
+$productSql = 'SELECT DISTINCT p.id, p.name, p.sku, p.unit_price FROM products p';
+if (!$canViewAllStores) $productSql .= ' JOIN inventory i ON i.product_id = p.id';
+$productSql .= " WHERE p.status = 'active'";
+if (!$canViewAllStores) $productSql .= $assignedStoreId > 0 ? ' AND i.store_id = ' . $assignedStoreId : ' AND 1 = 0';
+$products = $pdo->query($productSql . ' ORDER BY p.name')->fetchAll();
 $search = trim((string) ($_GET['q'] ?? ''));
 $statusFilter = (string) ($_GET['status'] ?? 'all');
 $storeFilter = $canViewAllStores ? (int) ($_GET['store_id'] ?? 0) : $assignedStoreId;
@@ -263,7 +269,7 @@ require __DIR__ . '/includes/header.php';
           <td class="text-end"><div class="sales-row-actions">
             <a class="btn sales-receipt-button" href="deposit_receipt.php?id=<?= (int) $deposit['id'] ?>" target="_blank" title="View deposit receipt"><i class="bi bi-receipt"></i></a>
             <?php if ($deposit['status'] === 'pending'): ?><button class="btn sales-approve-button deposit-payment-open" type="button" data-bs-toggle="modal" data-bs-target="#depositPaymentModal" data-id="<?= (int) $deposit['id'] ?>" data-number="<?= e($deposit['deposit_number']) ?>" data-customer="<?= e($deposit['customer_name']) ?>" data-balance="<?= e(number_format((float) $deposit['balance_amount'], 2, '.', '')) ?>"><i class="bi bi-cash-coin"></i>Pay</button><?php endif; ?>
-            <?php if ($deposit['status'] === 'paid'): ?><form method="POST" data-confirm="Confirm that <?= e($deposit['customer_name']) ?> is collecting these items now? Inventory will be deducted."><?= csrf_field() ?><input type="hidden" name="collect_deposit" value="1"><input type="hidden" name="deposit_id" value="<?= (int) $deposit['id'] ?>"><button class="btn sales-approve-button"><i class="bi bi-bag-check"></i>Collect</button></form><?php endif; ?>
+            <?php if ($deposit['status'] === 'paid' && $canApproveCollection): ?><form method="POST" data-confirm="Approve collection for <?= e($deposit['customer_name']) ?>? Inventory will be deducted and an approved sale will be created."><?= csrf_field() ?><input type="hidden" name="collect_deposit" value="1"><input type="hidden" name="deposit_id" value="<?= (int) $deposit['id'] ?>"><button class="btn sales-approve-button"><i class="bi bi-bag-check"></i>Approve collection</button></form><?php endif; ?>
             <?php if ($deposit['status'] === 'collected' && $deposit['completed_sale_id']): ?><a class="btn sales-receipt-button" href="receipt.php?id=<?= (int) $deposit['completed_sale_id'] ?>" target="_blank"><i class="bi bi-receipt"></i></a><?php endif; ?>
             <?php if (is_role('admin') && $deposit['status'] !== 'collected'): ?><form method="POST" data-confirm="Delete <?= e($deposit['deposit_number']) ?>? Review any refund due before continuing."><?= csrf_field() ?><input type="hidden" name="delete_deposit" value="1"><input type="hidden" name="deposit_id" value="<?= (int) $deposit['id'] ?>"><button class="btn deposit-delete-button"><i class="bi bi-trash3"></i></button></form><?php endif; ?>
           </div></td></tr>
@@ -287,7 +293,7 @@ require __DIR__ . '/includes/header.php';
 <?php
 $extraScripts = '<script>
 const depositProducts = ' . json_encode(array_map(static function ($product) {
-    return ['id' => (int) $product['id'], 'name' => $product['name'], 'sku' => $product['sku'], 'price' => (float) $product['unit_price']];
+    return ['id' => (int) $product['id'], 'name' => $product['name'], 'sku' => $product['sku'], 'price' => (float) $product['unit_price'], 'dimensional_conversion' => product_conversion_note($product['name'])];
 }, $products), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';
 const depositCurrency = ' . json_encode(CURRENCY_SYMBOL, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';
 const depositRows = document.getElementById("depositItemRows");
@@ -332,7 +338,7 @@ function addProductToDeposit(product) {
   const row = document.createElement("tr");
   row.dataset.productId = product.id;
   row.dataset.price = product.price;
-  row.innerHTML = "<td><div class=\"sales-cart-product\"><strong>" + depositEscape(product.name) + "</strong><small>" + depositEscape(product.sku) + " · " + depositCurrency + product.price.toFixed(2) + "</small></div><input type=\"hidden\" name=\"product_id[]\" value=\"" + product.id + "\"></td>" +
+  row.innerHTML = "<td><div class=\"sales-cart-product\"><strong>" + depositEscape(product.name) + "</strong><small>" + depositEscape(product.sku) + " · " + depositCurrency + product.price.toFixed(2) + (product.dimensional_conversion ? " · " + depositEscape(product.dimensional_conversion) : "") + "</small></div><input type=\"hidden\" name=\"product_id[]\" value=\"" + product.id + "\"></td>" +
     "<td><input class=\"form-control sales-quantity-input deposit-quantity\" type=\"number\" name=\"quantity[]\" min=\"1\" value=\"1\" required></td>" +
     "<td class=\"deposit-line-total sale-line-total text-end\">" + depositCurrency + "0.00</td>" +
     "<td class=\"text-end\"><button class=\"btn remove-sale-item remove-deposit-item\" type=\"button\" title=\"Remove\"><i class=\"bi bi-x-lg\"></i></button></td>";

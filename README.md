@@ -6,7 +6,8 @@ Vacman Enterprise is a server-rendered inventory and sales management system for
 
 - Dashboard with bar-and-pie inventory-mix charts, sales, stock, activity, and role-scoped daily machine-fee summaries
 - Product catalog with automatic product codes, category assignment, per-store stock editing, store grouping, and product/category/store filtering
-- Store-grouped inventory tracking with physical-count adjustments and role-based store visibility
+- Store-grouped inventory tracking with physical-count adjustments, role-based store visibility, and empty inventory for newly created stores until products are explicitly assigned
+- Product-specific timber conversions; 20-piece roofing-sheet bundles; louvre-glass boxes of 40 pieces for 24-inch, 32 pieces for 30-inch, and 27 pieces for 36-inch glass; and 10-piece boxes for all louvre frames
 - Multi-item sales checkout with VAT, discount and payment balance calculations, printable receipts, and audited receipt corrections for managers and administrators
 - Store-grouped transaction history showing the latest five transactions per store each day
 - Administrator-only sale deletion with automatic inventory restoration and audit logging
@@ -74,14 +75,14 @@ If Apache ignores `.htaccess`, confirm that `AllowOverride All` is enabled for t
 | Area | Access |
 | --- | --- |
 | Dashboard and reports | All signed-in users |
-| Products | Administrators, managers, and warehouse staff can view all stores; other users see only their assigned store. Administrators and warehouse staff can add or edit; only administrators can delete |
-| Inventory | Administrators, managers, and warehouse staff can view all stores; other users see only their assigned store. Administrators and warehouse staff can adjust stock |
-| Sales | Administrators and managers can view all stores; other users see only their assigned store. Administrators, managers, mini managers, and sales clerks can record sales; store-assigned users can act only within their store. Only administrators can delete sales |
+| Products | Administrators and managers can view all stores; every other login role sees only products assigned to its store. Administrators and warehouse staff can add or edit; warehouse actions are restricted to their assigned store. Only administrators can delete |
+| Inventory | Administrators and managers can view all stores; every other login role sees only its assigned store. Administrators and warehouse staff can adjust stock; warehouse adjustments are restricted to their assigned store |
+| Sales | Administrators, managers, mini managers, cashiers, and sales clerks can access the sales page; warehouse-only users cannot. Administrators, managers, mini managers, and sales clerks can record sales. Only administrators can delete sales |
 | Machine fees | Administrators and managers can register and view payments across all stores; cashiers can register and view payments only for their assigned store. Only administrators can delete payments |
-| Deposits | Customer item orders can be partly or fully paid without changing inventory. Stock is validated and deducted only when the customer collects the order; store-assigned users are restricted to their store |
+| Deposits | Customer item orders can be partly or fully paid without changing inventory. Only administrators and managers can approve collection; stock is validated and deducted only after that approval. Store-assigned users are restricted to their store |
 | Attendance | Includes mini managers, cashiers, warehouse users, sales clerks, and non-login staff. Administrators and managers mark across stores; mini managers mark only their assigned store |
-| Purchases | Administrators, managers, mini managers, and warehouse staff; mini managers are restricted to their assigned store |
-| Transfers | Administrators, managers, mini managers, and warehouse staff; mini managers can request from and approve arrivals for their assigned store |
+| Purchases | Administrators and managers can view all stores. Mini managers and warehouse staff are restricted to their assigned store |
+| Transfers | Administrators and managers can view all stores. Mini managers and warehouse staff see only transfers involving their assigned store and can request stock only from that store |
 | Stores | Administrators and managers; only administrators can delete |
 | User administration and audit trail | Administrators only; the audit trail shows the newest 20 events per page |
 | Profile | All signed-in users |
