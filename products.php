@@ -16,7 +16,6 @@ if (is_post() && isset($_POST['add_product'])) {
         'name' => 'required',
         'category_id' => 'required|int',
         'store_id' => 'required|int',
-        'opening_stock' => 'required|int|positive',
         'unit_price' => 'required|numeric|positive',
         'reorder_level' => 'required|int|positive',
         'min_stock' => 'required|int|positive',
@@ -26,6 +25,15 @@ if (is_post() && isset($_POST['add_product'])) {
     $minStock = (int) ($_POST['min_stock'] ?? 0);
     $maxStock = (int) ($_POST['max_stock'] ?? 0);
     $reorderLevel = (int) ($_POST['reorder_level'] ?? 0);
+    $productName = trim((string) ($_POST['name'] ?? ''));
+    if (is_nail_product($productName)) {
+        $openingStock = nail_total_pounds($_POST['opening_stock_boxes'] ?? null, $_POST['opening_stock_pounds'] ?? null);
+        if ($openingStock === null) $errors[] = 'Enter valid nail stock: non-negative boxes and 0 to 6 extra pounds.';
+    } else {
+        $rawOpeningStock = $_POST['opening_stock'] ?? null;
+        $openingStock = filter_var($rawOpeningStock, FILTER_VALIDATE_INT) !== false && (int) $rawOpeningStock >= 0 ? (int) $rawOpeningStock : null;
+        if ($openingStock === null) $errors[] = 'Opening stock must be a non-negative whole number.';
+    }
     if ($minStock > $maxStock) {
         $errors[] = 'Minimum stock cannot be greater than maximum stock.';
     }
@@ -61,7 +69,7 @@ if (is_post() && isset($_POST['add_product'])) {
             );
             $stmt->execute([
                 ':sku' => $temporarySku,
-                ':name' => trim($_POST['name']),
+                ':name' => $productName,
                 ':description' => trim($_POST['description'] ?? '') ?: null,
                 ':category_id' => (int) $_POST['category_id'],
                 ':unit_price' => (float) $_POST['unit_price'],
@@ -75,7 +83,6 @@ if (is_post() && isset($_POST['add_product'])) {
             $sku = 'PRD-' . str_pad((string) $productId, 6, '0', STR_PAD_LEFT);
             $pdo->prepare('UPDATE products SET sku = ? WHERE id = ?')->execute([$sku, $productId]);
 
-            $openingStock = (int) $_POST['opening_stock'];
             $pdo->prepare(
                 'INSERT INTO inventory (product_id, store_id, quantity, last_received_date)
                  VALUES (?, ?, ?, CASE WHEN ? > 0 THEN CURDATE() ELSE NULL END)'
@@ -84,7 +91,7 @@ if (is_post() && isset($_POST['add_product'])) {
             $pdo->commit();
             log_audit('create', 'product', $productId, null, [
                 'sku' => $sku,
-                'name' => trim($_POST['name']),
+                'name' => $productName,
                 'store_id' => $storeId,
                 'opening_stock' => $openingStock,
                 'unit_price' => (float) $_POST['unit_price'],
@@ -113,7 +120,6 @@ if (is_post() && isset($_POST['edit_product'])) {
         'name' => 'required',
         'category_id' => 'required|int',
         'store_id' => 'required|int',
-        'stock' => 'required|int|positive',
         'unit_price' => 'required|numeric|positive',
         'reorder_level' => 'required|int|positive',
         'min_stock' => 'required|int|positive',
@@ -124,7 +130,15 @@ if (is_post() && isset($_POST['edit_product'])) {
     $maxStock = (int) ($_POST['max_stock'] ?? 0);
     $reorderLevel = (int) ($_POST['reorder_level'] ?? 0);
     $storeId = (int) ($_POST['store_id'] ?? 0);
-    $stock = (int) ($_POST['stock'] ?? 0);
+    $productName = trim((string) ($_POST['name'] ?? ''));
+    if (is_nail_product($productName)) {
+        $stock = nail_total_pounds($_POST['stock_boxes'] ?? null, $_POST['stock_pounds'] ?? null);
+        if ($stock === null) $errors[] = 'Enter valid nail stock: non-negative boxes and 0 to 6 extra pounds.';
+    } else {
+        $rawStock = $_POST['stock'] ?? null;
+        $stock = filter_var($rawStock, FILTER_VALIDATE_INT) !== false && (int) $rawStock >= 0 ? (int) $rawStock : null;
+        if ($stock === null) $errors[] = 'Stock must be a non-negative whole number.';
+    }
     if (!$canViewAllStores && ($assignedStoreId <= 0 || $storeId !== $assignedStoreId)) {
         $errors[] = 'You can update products only in your assigned store.';
     }
@@ -163,7 +177,7 @@ if (is_post() && isset($_POST['edit_product'])) {
                  WHERE id = :id'
             );
             $stmt->execute([
-                ':name' => trim($_POST['name']),
+                ':name' => $productName,
                 ':description' => trim($_POST['description'] ?? '') ?: null,
                 ':category_id' => (int) $_POST['category_id'],
                 ':unit_price' => (float) $_POST['unit_price'],
@@ -186,7 +200,7 @@ if (is_post() && isset($_POST['edit_product'])) {
 
             $pdo->commit();
             log_audit('update', 'product', $id, null, [
-                'name' => trim($_POST['name']),
+                'name' => $productName,
                 'unit_price' => (float) $_POST['unit_price'],
                 'store_id' => $storeId,
                 'stock' => $stock,
@@ -339,7 +353,7 @@ require __DIR__ . '/includes/header.php';
   <div class="col-6 col-xl-3">
     <div class="product-stat-card product-stat-info">
       <span class="product-stat-icon bg-info-subtle text-info"><i class="bi bi-boxes"></i></span>
-      <div><div class="product-stat-value"><?= number_format($totalUnits) ?></div><div class="product-stat-label">Pieces in stock</div></div>
+      <div><div class="product-stat-value"><?= number_format($totalUnits) ?></div><div class="product-stat-label">Recorded stock units</div></div>
     </div>
   </div>
   <div class="col-6 col-xl-3">
@@ -425,7 +439,7 @@ require __DIR__ . '/includes/header.php';
             </td>
             <td><span class="badge rounded-pill text-bg-light border fw-normal"><?= e($product['category_name']) ?></span></td>
             <td><div class="product-store-cell"><i class="bi bi-shop me-1"></i><?= e($product['store_name']) ?></div></td>
-            <td class="fw-semibold"><?= e(money($product['unit_price'])) ?> / piece</td>
+            <td class="fw-semibold"><?= e(money($product['unit_price'])) ?> / <?= is_nail_product($product['name']) ? 'pound' : 'piece' ?></td>
             <td>
               <span class="stock-pill <?= $isLowStock ? 'stock-low' : 'stock-ok' ?>">
                 <?= e(product_quantity_label($product['name'], (int) $product['total_stock'])) ?>
@@ -488,7 +502,7 @@ $editRowId = (int) $product['inventory_id'];
           <div class="row g-3">
             <div class="col-md-8">
               <label class="form-label">Product name</label>
-              <input type="text" class="form-control" name="name" value="<?= e($product['name']) ?>" required>
+              <input type="text" class="form-control product-edit-name" name="name" value="<?= e($product['name']) ?>" data-standard-target="editStandardStock<?= $editRowId ?>" data-nail-target="editNailStock<?= $editRowId ?>" data-price-unit-target="editPriceUnit<?= $editRowId ?>" required>
             </div>
             <div class="col-md-4">
               <label class="form-label">Product code</label>
@@ -504,7 +518,7 @@ $editRowId = (int) $product['inventory_id'];
               </select>
             </div>
             <div class="col-md-6">
-              <label class="form-label">Selling price per piece (<?= e(CURRENCY_SYMBOL) ?>)</label>
+              <label class="form-label">Selling price per <span id="editPriceUnit<?= $editRowId ?>"><?= is_nail_product($product['name']) ? 'pound' : 'piece' ?></span> (<?= e(CURRENCY_SYMBOL) ?>)</label>
               <div class="input-group">
                 <span class="input-group-text"><?= e(CURRENCY_CODE) ?></span>
                 <input type="number" step="0.01" min="0" class="form-control" name="unit_price" value="<?= e((string) $product['unit_price']) ?>" required>
@@ -512,7 +526,7 @@ $editRowId = (int) $product['inventory_id'];
             </div>
             <div class="col-md-7">
               <label class="form-label" for="editStore<?= $editRowId ?>">Store</label>
-              <select class="form-select product-edit-store" name="store_id" id="editStore<?= $editRowId ?>" data-stock-target="editStock<?= $editRowId ?>" required>
+              <select class="form-select product-edit-store" name="store_id" id="editStore<?= $editRowId ?>" data-standard-target="editStock<?= $editRowId ?>" data-boxes-target="editStockBoxes<?= $editRowId ?>" data-pounds-target="editStockPounds<?= $editRowId ?>" required>
                 <?php foreach ($stores as $store): ?>
                 <?php $storeId = (int) $store['id']; ?>
                 <option value="<?= $storeId ?>" data-stock="<?= $productInventory[$storeId] ?? 0 ?>" <?= $storeId === $selectedStoreId ? 'selected' : '' ?>><?= e($store['name']) ?></option>
@@ -522,11 +536,18 @@ $editRowId = (int) $product['inventory_id'];
             </div>
             <div class="col-md-5">
               <label class="form-label" for="editStock<?= $editRowId ?>">Stock</label>
-              <div class="input-group">
-                <input type="number" min="0" class="form-control" name="stock" id="editStock<?= $editRowId ?>" value="<?= $productInventory[$selectedStoreId] ?? 0 ?>" required>
-                <span class="input-group-text">pieces</span>
+              <?php $selectedStock = (int) ($productInventory[$selectedStoreId] ?? 0); $isNail = is_nail_product($product['name']); ?>
+              <div id="editStandardStock<?= $editRowId ?>" class="<?= $isNail ? 'd-none' : '' ?>">
+                <div class="input-group">
+                  <input type="number" min="0" class="form-control" name="stock" id="editStock<?= $editRowId ?>" value="<?= $selectedStock ?>" <?= $isNail ? '' : 'required' ?>>
+                  <span class="input-group-text">pieces</span>
+                </div>
               </div>
-              <div class="form-text">Timber, roofing-sheet bundle, and louvre glass/frame box conversions apply automatically.</div>
+              <div id="editNailStock<?= $editRowId ?>" class="row g-2 <?= $isNail ? '' : 'd-none' ?>">
+                <div class="col-6"><div class="input-group"><input type="number" min="0" class="form-control" name="stock_boxes" id="editStockBoxes<?= $editRowId ?>" value="<?= intdiv($selectedStock, 7) ?>" <?= $isNail ? 'required' : '' ?>><span class="input-group-text">boxes</span></div></div>
+                <div class="col-6"><div class="input-group"><input type="number" min="0" max="6" class="form-control" name="stock_pounds" id="editStockPounds<?= $editRowId ?>" value="<?= $selectedStock % 7 ?>" <?= $isNail ? 'required' : '' ?>><span class="input-group-text">extra lb</span></div></div>
+              </div>
+              <div class="form-text"><?= $isNail ? 'Nails are stored in pounds: 7 pounds = 1 box.' : 'Timber, roofing-sheet bundle, and louvre glass/frame box conversions apply automatically.' ?></div>
             </div>
             <div class="col-12">
               <label class="form-label">Description <span class="text-muted fw-normal">(optional)</span></label>
@@ -581,7 +602,7 @@ $editRowId = (int) $product['inventory_id'];
           <div class="row g-3">
             <div class="col-md-7">
               <label class="form-label">Product name</label>
-              <input type="text" class="form-control" name="name" placeholder="e.g. Cement (50kg)" required autofocus>
+              <input type="text" class="form-control" name="name" id="addProductName" placeholder="e.g. Cement (50kg)" required autofocus>
             </div>
             <div class="col-md-5">
               <label class="form-label">Category</label>
@@ -604,14 +625,17 @@ $editRowId = (int) $product['inventory_id'];
             </div>
             <div class="col-md-5">
               <label class="form-label">Opening stock</label>
-              <div class="input-group">
-                <input type="number" min="0" class="form-control" name="opening_stock" value="0" required>
-                <span class="input-group-text">pieces</span>
+              <div id="addStandardStock">
+                <div class="input-group"><input type="number" min="0" class="form-control" name="opening_stock" value="0" required><span class="input-group-text">pieces</span></div>
               </div>
-              <div class="form-text">Timber, roofing-sheet bundle, and louvre glass/frame box conversions apply automatically.</div>
+              <div id="addNailStock" class="row g-2 d-none">
+                <div class="col-6"><div class="input-group"><input type="number" min="0" class="form-control" name="opening_stock_boxes" value="0"><span class="input-group-text">boxes</span></div></div>
+                <div class="col-6"><div class="input-group"><input type="number" min="0" max="6" class="form-control" name="opening_stock_pounds" value="0"><span class="input-group-text">extra lb</span></div></div>
+              </div>
+              <div class="form-text" id="addStockHelp">Timber, roofing-sheet bundle, and louvre glass/frame box conversions apply automatically.</div>
             </div>
             <div class="col-md-6">
-              <label class="form-label">Selling price per piece (<?= e(CURRENCY_SYMBOL) ?>)</label>
+              <label class="form-label">Selling price per <span id="addPriceUnit">piece</span> (<?= e(CURRENCY_SYMBOL) ?>)</label>
               <div class="input-group">
                 <span class="input-group-text"><?= e(CURRENCY_CODE) ?></span>
                 <input type="number" step="0.01" min="0" class="form-control" name="unit_price" placeholder="0.00" required>
@@ -651,13 +675,60 @@ $editRowId = (int) $product['inventory_id'];
 
 <?php if ($canManage): ?>
 <script>
+function productNameIsNail(value) {
+  return /\bnails?\b/i.test(String(value || "").trim());
+}
+
+function toggleStockInputs(nameInput) {
+  const isNail = productNameIsNail(nameInput.value);
+  const standard = document.getElementById(nameInput.dataset.standardTarget);
+  const nail = document.getElementById(nameInput.dataset.nailTarget);
+  const priceUnit = document.getElementById(nameInput.dataset.priceUnitTarget);
+  if (!standard || !nail) return;
+  standard.classList.toggle("d-none", isNail);
+  nail.classList.toggle("d-none", !isNail);
+  standard.querySelectorAll("input").forEach(function (input) { input.required = !isNail; });
+  nail.querySelectorAll("input").forEach(function (input) { input.required = isNail; });
+  if (priceUnit) priceUnit.textContent = isNail ? "pound" : "piece";
+}
+
 document.querySelectorAll('.product-edit-store').forEach(function (storeSelect) {
   storeSelect.addEventListener('change', function () {
-    const stockInput = document.getElementById(storeSelect.dataset.stockTarget);
     const selectedOption = storeSelect.options[storeSelect.selectedIndex];
-    if (stockInput && selectedOption) stockInput.value = selectedOption.dataset.stock || '0';
+    if (!selectedOption) return;
+    const stock = parseInt(selectedOption.dataset.stock || '0', 10) || 0;
+    const standardInput = document.getElementById(storeSelect.dataset.standardTarget);
+    const boxesInput = document.getElementById(storeSelect.dataset.boxesTarget);
+    const poundsInput = document.getElementById(storeSelect.dataset.poundsTarget);
+    if (standardInput) standardInput.value = stock;
+    if (boxesInput) boxesInput.value = Math.floor(stock / 7);
+    if (poundsInput) poundsInput.value = stock % 7;
   });
 });
+
+document.querySelectorAll('.product-edit-name').forEach(function (nameInput) {
+  nameInput.addEventListener('input', function () { toggleStockInputs(nameInput); });
+  toggleStockInputs(nameInput);
+});
+
+const addProductName = document.getElementById('addProductName');
+if (addProductName) {
+  const standard = document.getElementById('addStandardStock');
+  const nail = document.getElementById('addNailStock');
+  const priceUnit = document.getElementById('addPriceUnit');
+  const help = document.getElementById('addStockHelp');
+  const toggleAddNailStock = function () {
+    const isNail = productNameIsNail(addProductName.value);
+    standard.classList.toggle('d-none', isNail);
+    nail.classList.toggle('d-none', !isNail);
+    standard.querySelectorAll('input').forEach(function (input) { input.required = !isNail; });
+    nail.querySelectorAll('input').forEach(function (input) { input.required = isNail; });
+    priceUnit.textContent = isNail ? 'pound' : 'piece';
+    help.textContent = isNail ? 'Enter boxes and extra pounds. Seven pounds equal one box.' : 'Timber, roofing-sheet bundle, and louvre glass/frame box conversions apply automatically.';
+  };
+  addProductName.addEventListener('input', toggleAddNailStock);
+  toggleAddNailStock();
+}
 </script>
 <?php endif; ?>
 

@@ -17,15 +17,26 @@ if (is_post() && isset($_POST['add_transfer'])) {
     $productId = (int) ($_POST['product_id'] ?? 0);
     $fromStore = (int) ($_POST['from_store_id'] ?? 0);
     $toStore = (int) ($_POST['to_store_id'] ?? 0);
-    $quantity = (int) ($_POST['quantity'] ?? 0);
     $errors = validate($_POST, [
         'product_id' => 'required|int',
         'from_store_id' => 'required|int',
         'to_store_id' => 'required|int',
-        'quantity' => 'required|int|positive',
     ]);
 
-    if ($quantity < 1) $errors[] = 'Quantity must be at least 1.';
+    $productStmt = $pdo->prepare("SELECT name FROM products WHERE id = ? AND status = 'active'");
+    $productStmt->execute([$productId]);
+    $productName = $productStmt->fetchColumn();
+    if (!$productName) $errors[] = 'Select an active product.';
+    if ($productName && is_nail_product((string) $productName)) {
+        $quantity = nail_total_pounds($_POST['quantity_boxes'] ?? null, $_POST['quantity_pounds'] ?? null);
+        if ($quantity === null) $errors[] = 'Enter whole boxes and 0 to 6 extra pounds.';
+    } else {
+        $quantityInput = $_POST['quantity'] ?? null;
+        $quantity = filter_var($quantityInput, FILTER_VALIDATE_INT) !== false ? (int) $quantityInput : null;
+        if ($quantity === null) $errors[] = 'Quantity must be a whole number.';
+    }
+
+    if ($quantity !== null && $quantity < 1) $errors[] = 'Quantity must be at least 1.';
     if ($fromStore === $toStore && $fromStore !== 0) $errors[] = 'Source and destination stores must be different.';
     if (!$canViewAllStores && ($assignedStoreId <= 0 || $fromStore !== $assignedStoreId)) $errors[] = 'You can request transfers only from your assigned store.';
     if (!$canViewAllStores && $assignedStoreId > 0 && $productId > 0) {
@@ -273,7 +284,7 @@ require __DIR__ . '/includes/header.php';
 <section class="transfer-kpi-grid mb-4" aria-label="Transfer summary">
   <div class="transfer-kpi transfer-kpi-total"><span class="transfer-kpi-icon"><i class="bi bi-arrow-left-right"></i></span><div><span>Total transfers</span><strong><?= (int) $transferMetrics['total_transfers'] ?></strong><small>All movement records</small></div></div>
   <div class="transfer-kpi transfer-kpi-pending"><span class="transfer-kpi-icon"><i class="bi bi-clock-history"></i></span><div><span>Awaiting approval</span><strong><?= (int) $transferMetrics['pending_transfers'] ?></strong><small>Requests needing review</small></div></div>
-  <div class="transfer-kpi transfer-kpi-moving"><span class="transfer-kpi-icon"><i class="bi bi-box-seam"></i></span><div><span>Pieces moving</span><strong><?= (int) $transferMetrics['units_moving'] ?></strong><small>Approved or in transit</small></div></div>
+  <div class="transfer-kpi transfer-kpi-moving"><span class="transfer-kpi-icon"><i class="bi bi-box-seam"></i></span><div><span>Units moving</span><strong><?= (int) $transferMetrics['units_moving'] ?></strong><small>Pieces or pounds, by product</small></div></div>
   <div class="transfer-kpi transfer-kpi-complete"><span class="transfer-kpi-icon"><i class="bi bi-check2-circle"></i></span><div><span>Completed this month</span><strong><?= (int) $transferMetrics['completed_month'] ?></strong><small><?= e(date('F Y')) ?></small></div></div>
 </section>
 
@@ -348,7 +359,7 @@ require __DIR__ . '/includes/header.php';
             <div class="col-md-5"><label class="form-label" for="transferFromStore">Source store</label><select class="form-select" name="from_store_id" id="transferFromStore" required><option value="">Select source</option><?php foreach ($activeStores as $store): ?><option value="<?= (int) $store['id'] ?>" <?= !$canViewAllStores && (int) $store['id'] === $assignedStoreId ? 'selected' : '' ?> <?= !$canViewAllStores && (int) $store['id'] !== $assignedStoreId ? 'disabled' : '' ?>><?= e($store['name']) ?></option><?php endforeach; ?></select></div>
             <div class="col-md-2 d-none d-md-flex transfer-route-arrow"><span><i class="bi bi-arrow-right"></i></span></div>
             <div class="col-md-5"><label class="form-label" for="transferToStore">Destination store</label><select class="form-select" name="to_store_id" id="transferToStore" required><option value="">Select destination</option><?php foreach ($activeStores as $store): ?><option value="<?= (int) $store['id'] ?>"><?= e($store['name']) ?></option><?php endforeach; ?></select></div>
-            <div class="col-md-4"><label class="form-label" for="transferQuantity">Quantity</label><div class="input-group"><input type="number" class="form-control" name="quantity" id="transferQuantity" min="1" step="1" placeholder="0" required><span class="input-group-text">pieces</span></div><div class="form-text">Timber, roofing-sheet bundle, and louvre glass/frame box conversions apply automatically.</div></div>
+            <div class="col-md-4"><label class="form-label" for="transferQuantity">Quantity</label><div id="transferStandardQuantity" class="input-group"><input type="number" class="form-control" name="quantity" id="transferQuantity" min="1" step="1" placeholder="0" required><span class="input-group-text">pieces</span></div><div id="transferNailQuantity" class="row g-2 d-none"><div class="col-6"><div class="input-group"><input type="number" class="form-control" name="quantity_boxes" id="transferQuantityBoxes" min="0" step="1" value="0"><span class="input-group-text">boxes</span></div></div><div class="col-6"><div class="input-group"><input type="number" class="form-control" name="quantity_pounds" id="transferQuantityPounds" min="0" max="6" step="1" value="0"><span class="input-group-text">extra lb</span></div></div></div><div class="form-text" id="transferQuantityHelp">Timber, roofing-sheet bundle, and louvre glass/frame box conversions apply automatically.</div></div>
             <div class="col-md-8"><label class="form-label" for="transferNotes">Notes <span class="text-muted fw-normal">(optional)</span></label><input type="text" class="form-control" name="notes" id="transferNotes" maxlength="500" placeholder="Add handling or delivery instructions"></div>
           </div>
           <div class="transfer-workflow-note mt-4"><i class="bi bi-diagram-3"></i><div><strong>Approval workflow</strong><small>Requested → destination-store manager approval → In transit → Completed. Administrators can approve any destination; inventory updates when the destination receives the transfer.</small></div></div>
@@ -362,7 +373,7 @@ require __DIR__ . '/includes/header.php';
 
 <?php
 $productJson = json_encode(array_map(static function ($product) {
-        return ['id' => (int) $product['id'], 'name' => $product['name'], 'sku' => $product['sku']];
+        return ['id' => (int) $product['id'], 'name' => $product['name'], 'sku' => $product['sku'], 'is_nail' => is_nail_product($product['name'])];
 }, $products), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
 
 $extraScripts = '<script>
@@ -374,6 +385,22 @@ $extraScripts = '<script>
   const form = document.getElementById("addTransferForm");
   const fromStore = document.getElementById("transferFromStore");
   const toStore = document.getElementById("transferToStore");
+  const standardQuantity = document.getElementById("transferStandardQuantity");
+  const nailQuantity = document.getElementById("transferNailQuantity");
+  const quantity = document.getElementById("transferQuantity");
+  const quantityBoxes = document.getElementById("transferQuantityBoxes");
+  const quantityPounds = document.getElementById("transferQuantityPounds");
+  const quantityHelp = document.getElementById("transferQuantityHelp");
+
+  function selectQuantityMode(product) {
+    const isNail = Boolean(product && product.is_nail);
+    standardQuantity.classList.toggle("d-none", isNail);
+    nailQuantity.classList.toggle("d-none", !isNail);
+    quantity.required = !isNail;
+    quantityBoxes.required = isNail;
+    quantityPounds.required = isNail;
+    quantityHelp.textContent = isNail ? "7 pounds = 1 box. The transfer is stored in pounds." : "Timber, roofing-sheet bundle, and louvre glass/frame box conversions apply automatically.";
+  }
 
   function escapeHtml(value) {
     const node = document.createElement("div");
@@ -399,6 +426,7 @@ $extraScripts = '<script>
           if (!product) return;
           search.value = product.name + " (" + product.sku + ")";
           productId.value = product.id;
+          selectQuantityMode(product);
           results.style.display = "none";
         });
       });
@@ -407,7 +435,7 @@ $extraScripts = '<script>
   }
 
   if (search) {
-    search.addEventListener("input", function () { productId.value = ""; renderResults(search.value); });
+    search.addEventListener("input", function () { productId.value = ""; selectQuantityMode(null); renderResults(search.value); });
     search.addEventListener("keydown", function (event) {
       if (event.key === "Enter") {
         event.preventDefault();

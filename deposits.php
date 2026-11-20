@@ -293,7 +293,7 @@ require __DIR__ . '/includes/header.php';
 <?php
 $extraScripts = '<script>
 const depositProducts = ' . json_encode(array_map(static function ($product) {
-    return ['id' => (int) $product['id'], 'name' => $product['name'], 'sku' => $product['sku'], 'price' => (float) $product['unit_price'], 'dimensional_conversion' => product_conversion_note($product['name'])];
+    return ['id' => (int) $product['id'], 'name' => $product['name'], 'sku' => $product['sku'], 'price' => (float) $product['unit_price'], 'dimensional_conversion' => product_conversion_note($product['name']), 'is_nail' => is_nail_product($product['name'])];
 }, $products), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';
 const depositCurrency = ' . json_encode(CURRENCY_SYMBOL, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';
 const depositRows = document.getElementById("depositItemRows");
@@ -311,7 +311,15 @@ function recalcDepositOrder() {
   let units = 0;
   depositRows.querySelectorAll("tr").forEach(function(row) {
     const price = parseFloat(row.dataset.price) || 0;
-    const qty = Math.max(parseInt(row.querySelector(".deposit-quantity").value, 10) || 0, 0);
+    let qty;
+    if (row.dataset.isNail === "1") {
+      const boxes = Math.max(parseInt(row.querySelector(".deposit-nail-boxes").value, 10) || 0, 0);
+      const pounds = Math.min(Math.max(parseInt(row.querySelector(".deposit-nail-pounds").value, 10) || 0, 0), 6);
+      qty = (boxes * 7) + pounds;
+      row.querySelector(".deposit-quantity").value = qty;
+    } else {
+      qty = Math.max(parseInt(row.querySelector(".deposit-quantity").value, 10) || 0, 0);
+    }
     const subtotal = price * qty;
     total += subtotal;
     units += qty;
@@ -325,25 +333,34 @@ function recalcDepositOrder() {
   depositBalance.classList.toggle("due", balance > 0);
   initialPayment.max = total.toFixed(2);
   depositEmpty.style.display = depositRows.children.length ? "none" : "flex";
-  depositItemCount.textContent = units + (units === 1 ? " item" : " items");
+  depositItemCount.textContent = units + (units === 1 ? " base unit" : " base units");
 }
 function addProductToDeposit(product) {
   const existing = depositRows.querySelector("tr[data-product-id=\"" + product.id + "\"]");
   if (existing) {
     const input = existing.querySelector(".deposit-quantity");
     input.value = (parseInt(input.value, 10) || 0) + 1;
+    if (existing.dataset.isNail === "1") {
+      const total = parseInt(input.value, 10) || 0;
+      existing.querySelector(".deposit-nail-boxes").value = Math.floor(total / 7);
+      existing.querySelector(".deposit-nail-pounds").value = total % 7;
+    }
     recalcDepositOrder();
     return;
   }
   const row = document.createElement("tr");
   row.dataset.productId = product.id;
   row.dataset.price = product.price;
-  row.innerHTML = "<td><div class=\"sales-cart-product\"><strong>" + depositEscape(product.name) + "</strong><small>" + depositEscape(product.sku) + " · " + depositCurrency + product.price.toFixed(2) + (product.dimensional_conversion ? " · " + depositEscape(product.dimensional_conversion) : "") + "</small></div><input type=\"hidden\" name=\"product_id[]\" value=\"" + product.id + "\"></td>" +
-    "<td><input class=\"form-control sales-quantity-input deposit-quantity\" type=\"number\" name=\"quantity[]\" min=\"1\" value=\"1\" required></td>" +
+  row.dataset.isNail = product.is_nail ? "1" : "0";
+  const quantityControl = product.is_nail
+    ? "<input class=\"deposit-quantity\" type=\"hidden\" name=\"quantity[]\" value=\"1\"><div class=\"d-flex gap-1\"><div class=\"input-group input-group-sm\"><input class=\"form-control deposit-nail-boxes\" type=\"number\" min=\"0\" value=\"0\" required><span class=\"input-group-text\">boxes</span></div><div class=\"input-group input-group-sm\"><input class=\"form-control deposit-nail-pounds\" type=\"number\" min=\"0\" max=\"6\" value=\"1\" required><span class=\"input-group-text\">extra lb</span></div></div>"
+    : "<input class=\"form-control sales-quantity-input deposit-quantity\" type=\"number\" name=\"quantity[]\" min=\"1\" value=\"1\" required>";
+  row.innerHTML = "<td><div class=\"sales-cart-product\"><strong>" + depositEscape(product.name) + "</strong><small>" + depositEscape(product.sku) + " · " + depositCurrency + product.price.toFixed(2) + (product.is_nail ? " per pound" : " per piece") + (product.dimensional_conversion ? " · " + depositEscape(product.dimensional_conversion) : "") + "</small></div><input type=\"hidden\" name=\"product_id[]\" value=\"" + product.id + "\"></td>" +
+    "<td>" + quantityControl + "</td>" +
     "<td class=\"deposit-line-total sale-line-total text-end\">" + depositCurrency + "0.00</td>" +
     "<td class=\"text-end\"><button class=\"btn remove-sale-item remove-deposit-item\" type=\"button\" title=\"Remove\"><i class=\"bi bi-x-lg\"></i></button></td>";
   depositRows.appendChild(row);
-  row.querySelector(".deposit-quantity").addEventListener("input", recalcDepositOrder);
+  row.querySelectorAll("input").forEach(function(input) { input.addEventListener("input", recalcDepositOrder); });
   row.querySelector(".remove-deposit-item").addEventListener("click", function() { row.remove(); recalcDepositOrder(); });
   recalcDepositOrder();
 }
@@ -352,7 +369,7 @@ function renderDepositProductResults(query) {
   if (!normalized) { productResults.style.display = "none"; productResults.innerHTML = ""; return; }
   const matches = depositProducts.filter(function(product) { return product.name.toLowerCase().includes(normalized) || product.sku.toLowerCase().includes(normalized); }).slice(0, 8);
   if (!matches.length) { productResults.innerHTML = "<div class=\"sales-search-empty\">No matching products</div>"; productResults.style.display = "block"; return; }
-  productResults.innerHTML = matches.map(function(product) { return "<button type=\"button\" class=\"sale-search-result\" data-id=\"" + product.id + "\"><span><strong>" + depositEscape(product.name) + "</strong><small>" + depositEscape(product.sku) + "</small></span><b>" + depositCurrency + product.price.toFixed(2) + "</b></button>"; }).join("");
+  productResults.innerHTML = matches.map(function(product) { return "<button type=\"button\" class=\"sale-search-result\" data-id=\"" + product.id + "\"><span><strong>" + depositEscape(product.name) + "</strong><small>" + depositEscape(product.sku) + "</small></span><b>" + depositCurrency + product.price.toFixed(2) + (product.is_nail ? " / lb" : " / piece") + "</b></button>"; }).join("");
   productResults.style.display = "block";
   productResults.querySelectorAll(".sale-search-result").forEach(function(button) { button.addEventListener("click", function() { const product = depositProducts.find(function(item) { return String(item.id) === button.dataset.id; }); if (product) addProductToDeposit(product); productSearch.value = ""; productResults.style.display = "none"; productSearch.focus(); }); });
 }

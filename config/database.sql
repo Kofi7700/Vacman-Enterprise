@@ -208,6 +208,19 @@ ON DUPLICATE KEY UPDATE full_name = VALUES(full_name), roles = COALESCE(NULLIF(r
 UPDATE `stores` SET `manager_id` = 2 WHERE `id` = 1;
 
 -- --------------------------------------------------------
+-- Shared PHP sessions (safe across multiple containers)
+-- --------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS `app_sessions` (
+  `id` varchar(128) NOT NULL,
+  `data` mediumblob NOT NULL,
+  `expires_at` bigint unsigned NOT NULL,
+  `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `idx_app_sessions_expires` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+-- --------------------------------------------------------
 -- Table structure for table `products`
 -- --------------------------------------------------------
 

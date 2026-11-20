@@ -14,14 +14,12 @@ if (is_post() && isset($_POST['adjust_stock'])) {
     verify_csrf();
 
     $inventoryId = (int) ($_POST['inventory_id'] ?? 0);
-    $newQuantity = $_POST['new_quantity'] ?? '';
-
-    if ($inventoryId <= 0 || filter_var($newQuantity, FILTER_VALIDATE_INT) === false || (int) $newQuantity < 0) {
-        flash_set('danger', 'Enter a valid non-negative quantity.');
+    if ($inventoryId <= 0) {
+        flash_set('danger', 'Invalid inventory record.');
         redirect('inventory.php');
     }
 
-    $stmt = $pdo->prepare('SELECT quantity, store_id FROM inventory WHERE id = ?');
+    $stmt = $pdo->prepare('SELECT i.quantity, i.store_id, p.name AS product_name FROM inventory i JOIN products p ON p.id = i.product_id WHERE i.id = ?');
     $stmt->execute([$inventoryId]);
     $old = $stmt->fetch();
 
@@ -34,11 +32,23 @@ if (is_post() && isset($_POST['adjust_stock'])) {
         require __DIR__ . '/errors/403.php';
         exit;
     }
+    if (is_nail_product($old['product_name'])) {
+        $newQuantity = nail_total_pounds($_POST['new_quantity_boxes'] ?? null, $_POST['new_quantity_pounds'] ?? null);
+    } else {
+        $rawQuantity = $_POST['new_quantity'] ?? null;
+        $newQuantity = filter_var($rawQuantity, FILTER_VALIDATE_INT) !== false && (int) $rawQuantity >= 0 ? (int) $rawQuantity : null;
+    }
+    if ($newQuantity === null) {
+        flash_set('danger', is_nail_product($old['product_name'])
+            ? 'Enter valid nail stock: non-negative boxes and 0 to 6 extra pounds.'
+            : 'Enter a valid non-negative quantity.');
+        redirect('inventory.php');
+    }
 
     try {
         $pdo->prepare('UPDATE inventory SET quantity = ?, last_physical_count = CURDATE(), notes = ? WHERE id = ?')
-            ->execute([(int) $newQuantity, trim($_POST['notes'] ?? '') ?: null, $inventoryId]);
-        log_audit('stock_adjustment', 'inventory', $inventoryId, ['quantity' => $old['quantity']], ['quantity' => (int) $newQuantity]);
+            ->execute([$newQuantity, trim($_POST['notes'] ?? '') ?: null, $inventoryId]);
+        log_audit('stock_adjustment', 'inventory', $inventoryId, ['quantity' => $old['quantity']], ['quantity' => $newQuantity]);
         flash_set('success', 'Stock count updated.');
     } catch (PDOException $e) {
         error_log('Stock adjustment failed: ' . $e->getMessage());
@@ -125,15 +135,15 @@ require __DIR__ . '/includes/header.php';
 <section class="inventory-kpi-grid mb-4" aria-label="Inventory summary">
   <div class="inventory-kpi inventory-kpi-total">
     <span class="inventory-kpi-icon"><i class="bi bi-box-seam"></i></span>
-    <div><span>On-hand pieces</span><strong><?= number_format($totalUnits) ?></strong><small>Across filtered records</small></div>
+    <div><span>On-hand units</span><strong><?= number_format($totalUnits) ?></strong><small>Pieces or pounds, by product</small></div>
   </div>
   <div class="inventory-kpi inventory-kpi-available">
     <span class="inventory-kpi-icon"><i class="bi bi-check2-circle"></i></span>
-    <div><span>Available pieces</span><strong><?= number_format($availableUnits) ?></strong><small>After reservations</small></div>
+    <div><span>Available units</span><strong><?= number_format($availableUnits) ?></strong><small>After reservations</small></div>
   </div>
   <div class="inventory-kpi inventory-kpi-reserved">
     <span class="inventory-kpi-icon"><i class="bi bi-bookmark-check"></i></span>
-    <div><span>Reserved pieces</span><strong><?= number_format($reservedUnits) ?></strong><small>Committed stock</small></div>
+    <div><span>Reserved units</span><strong><?= number_format($reservedUnits) ?></strong><small>Committed stock</small></div>
   </div>
   <div class="inventory-kpi inventory-kpi-low">
     <span class="inventory-kpi-icon"><i class="bi bi-exclamation-triangle"></i></span>
@@ -262,11 +272,19 @@ require __DIR__ . '/includes/header.php';
           </div>
           <div class="mb-3">
             <label class="form-label">Counted quantity</label>
+            <?php if (is_nail_product($row['product_name'])): ?>
+            <div class="row g-2">
+              <div class="col-6"><div class="input-group"><input type="number" class="form-control" name="new_quantity_boxes" min="0" value="<?= intdiv((int) $row['quantity'], 7) ?>" required><span class="input-group-text">boxes</span></div></div>
+              <div class="col-6"><div class="input-group"><input type="number" class="form-control" name="new_quantity_pounds" min="0" max="6" value="<?= (int) $row['quantity'] % 7 ?>" required><span class="input-group-text">extra lb</span></div></div>
+            </div>
+            <div class="form-text">Total stock is stored in pounds. Seven pounds equal one box.</div>
+            <?php else: ?>
             <div class="input-group">
               <input type="number" class="form-control" name="new_quantity" min="0" value="<?= (int) $row['quantity'] ?>" required>
               <span class="input-group-text">pieces</span>
             </div>
             <div class="form-text">Enter the quantity physically counted at this store. Timber, roofing-sheet bundle, and louvre glass/frame box conversions apply automatically.</div>
+            <?php endif; ?>
           </div>
           <div>
             <label class="form-label">Adjustment note <span class="text-muted fw-normal">(optional)</span></label>

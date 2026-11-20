@@ -108,9 +108,9 @@ if ($reportType === 'sales_summary') {
     foreach ($results as $row) { $chartLabels[] = $row['name']; $chartValues[] = (float) $row['revenue']; }
     $summaryCards = [
         ['label' => 'Top products', 'value' => number_format(count($results)), 'hint' => 'Ranked products shown', 'icon' => 'trophy', 'tone' => 'revenue'],
-        ['label' => 'Pieces sold', 'value' => number_format($unitsSold), 'hint' => 'Across ranked products', 'icon' => 'box-seam', 'tone' => 'transactions'],
+        ['label' => 'Base units sold', 'value' => number_format($unitsSold), 'hint' => 'Pieces or pounds, by product', 'icon' => 'box-seam', 'tone' => 'transactions'],
         ['label' => 'Generated revenue', 'value' => money($revenue), 'hint' => 'From ranked products', 'icon' => 'cash-coin', 'tone' => 'average'],
-        ['label' => 'Average per piece', 'value' => money($unitsSold ? $revenue / $unitsSold : 0), 'hint' => 'Blended selling price', 'icon' => 'tag', 'tone' => 'days'],
+        ['label' => 'Average per base unit', 'value' => money($unitsSold ? $revenue / $unitsSold : 0), 'hint' => 'Blended selling price', 'icon' => 'tag', 'tone' => 'days'],
     ];
 } elseif ($reportType === 'deposits') {
     $sql = "SELECT DATE(d.created_at) AS report_date, d.deposit_number, st.name AS store_name,
@@ -208,8 +208,8 @@ if ($reportType === 'sales_summary') {
     $affectedStores = count(array_unique(array_column($results, 'store_name')));
     $summaryCards = [
         ['label' => 'Low-stock items', 'value' => number_format(count($results)), 'hint' => 'At or below threshold', 'icon' => 'exclamation-triangle', 'tone' => 'warning'],
-        ['label' => 'Out of stock', 'value' => number_format($outOfStock), 'hint' => 'Zero pieces available', 'icon' => 'x-octagon', 'tone' => 'danger'],
-        ['label' => 'Reorder gap', 'value' => number_format($reorderUnits), 'hint' => 'Pieces to reach threshold', 'icon' => 'cart-plus', 'tone' => 'average'],
+        ['label' => 'Out of stock', 'value' => number_format($outOfStock), 'hint' => 'Zero units available', 'icon' => 'x-octagon', 'tone' => 'danger'],
+        ['label' => 'Reorder gap', 'value' => number_format($reorderUnits), 'hint' => 'Units to reach threshold', 'icon' => 'cart-plus', 'tone' => 'average'],
         ['label' => 'Affected stores', 'value' => number_format($affectedStores), 'hint' => 'Locations needing attention', 'icon' => 'shop', 'tone' => 'days'],
     ];
 } else {
@@ -233,7 +233,7 @@ if ($reportType === 'sales_summary') {
     $stockedLines = count(array_filter($results, static fn($row) => (int) $row['quantity'] > 0));
     $summaryCards = [
         ['label' => 'Selling value', 'value' => money($sellingValue), 'hint' => 'At current selling prices', 'icon' => 'cash-stack', 'tone' => 'revenue'],
-        ['label' => 'Stock pieces', 'value' => number_format($totalUnits), 'hint' => 'Pieces currently recorded', 'icon' => 'boxes', 'tone' => 'transactions'],
+        ['label' => 'Stock units', 'value' => number_format($totalUnits), 'hint' => 'Pieces or pounds, by product', 'icon' => 'boxes', 'tone' => 'transactions'],
         ['label' => 'Stocked lines', 'value' => number_format($stockedLines), 'hint' => 'Product-store combinations', 'icon' => 'clipboard-data', 'tone' => 'average'],
         ['label' => 'Average piece value', 'value' => money($totalUnits ? $sellingValue / $totalUnits : 0), 'hint' => 'Across available stock', 'icon' => 'tag', 'tone' => 'days'],
     ];
@@ -307,7 +307,7 @@ require __DIR__ . '/includes/header.php';
       <thead><tr><th>Date</th><th>Transactions</th><th>Revenue</th><th>Average sale</th><th>Share</th></tr></thead>
       <tbody><?php if (!$results): ?><tr><td colspan="5"><?php require __DIR__ . '/includes/report-empty.php'; ?></td></tr><?php else: foreach ($results as $row): $share = $totalRevenue > 0 ? ((float) $row['revenue'] / $totalRevenue) * 100 : 0; ?><tr><td><div class="report-date"><span><?= e(date('d', strtotime($row['report_date']))) ?></span><div><strong><?= e(date('M Y', strtotime($row['report_date']))) ?></strong><small><?= e(date('l', strtotime($row['report_date']))) ?></small></div></div></td><td><strong class="report-number"><?= number_format((int) $row['transaction_count']) ?></strong></td><td><strong class="report-money"><?= e(money($row['revenue'])) ?></strong></td><td><?= e(money($row['average_sale'])) ?></td><td><div class="report-share"><span style="width: <?= min(100, $share) ?>%"></span></div><small class="report-share-label"><?= number_format($share, 1) ?>%</small></td></tr><?php endforeach; endif; ?></tbody>
       <?php elseif ($reportType === 'top_products'): ?>
-      <thead><tr><th>Rank</th><th>Product</th><th>Category</th><th>Pieces sold</th><th>Revenue</th></tr></thead>
+      <thead><tr><th>Rank</th><th>Product</th><th>Category</th><th>Quantity sold</th><th>Revenue</th></tr></thead>
       <tbody><?php if (!$results): ?><tr><td colspan="5"><?php require __DIR__ . '/includes/report-empty.php'; ?></td></tr><?php else: foreach ($results as $index => $row): ?><tr><td><span class="report-rank <?= $index < 3 ? 'top' : '' ?>"><?= $index + 1 ?></span></td><td><div class="report-product"><strong><?= e($row['name']) ?></strong><small><?= e($row['sku']) ?></small></div></td><td><span class="report-category"><?= e($row['category']) ?></span></td><td><strong class="report-number"><?= e(product_quantity_label($row['name'], (int) $row['quantity_sold'])) ?></strong></td><td><strong class="report-money"><?= e(money($row['revenue'])) ?></strong></td></tr><?php endforeach; endif; ?></tbody>
       <?php elseif ($reportType === 'deposits'): ?>
       <thead><tr><th>Order</th><th>Date</th><th>Customer</th><th>Store</th><th>Order value</th><th>Paid</th><th>Balance</th><th>Status</th></tr></thead>

@@ -2,11 +2,13 @@
 # web service. See the Render deployment notes at the bottom of README.md.
 FROM php:8.2-apache
 
-# pdo_mysql/mysqli need no extra system packages, so this is a plain
-# docker-php-ext-install. mod_rewrite isn't on by default; mod_alias
-# (used by the RedirectMatch rules below) already is. AllowOverride All
-# lets .htaccess actually apply once it's copied in.
-RUN docker-php-ext-install pdo pdo_mysql mysqli \
+# Install the public CA bundle for verified hosted-MySQL TLS connections.
+# mod_rewrite isn't on by default; mod_alias (used by RedirectMatch) is.
+# AllowOverride All lets .htaccess apply once it is copied in.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && docker-php-ext-install pdo pdo_mysql mysqli \
  && a2enmod rewrite \
  && sed -ri -e 's!AllowOverride None!AllowOverride All!g' /etc/apache2/apache2.conf
 

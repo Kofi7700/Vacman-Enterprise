@@ -270,7 +270,7 @@ if (is_post() && isset($_POST['add_sale'])) {
                     throw new RuntimeException('One of the selected products is not stocked at the selected store.');
                 }
                 if ((int) $inventory['quantity'] < $quantity) {
-                    throw new RuntimeException('Not enough stock: only ' . (int) $inventory['quantity'] . ' pieces of "' . $inventory['name'] . '" available.');
+                    throw new RuntimeException('Not enough stock: only ' . product_quantity_label($inventory['name'], (int) $inventory['quantity']) . ' of "' . $inventory['name'] . '" available.');
                 }
 
                 $unitPrice = (float) $inventory['unit_price'];
@@ -333,7 +333,7 @@ if (is_post() && isset($_POST['add_sale'])) {
             $pdo->commit();
             $itemCount = count($items);
             log_audit('create', 'sale', $saleId, null, ['store_id' => $storeId, 'items' => $itemCount, 'subtotal' => $subTotal, 'discount' => $discountAmount, 'vat' => $vatAmount, 'total' => $total, 'balance' => $balanceAmount]);
-            $label = $itemCount === 1 ? "{$items[0]['quantity']} pieces × {$items[0]['name']}" : "{$itemCount} products";
+            $label = $itemCount === 1 ? product_quantity_label($items[0]['name'], (int) $items[0]['quantity']) . " × {$items[0]['name']}" : "{$itemCount} products";
             flash_set('success', "Sale recorded: {$label} for " . money($total) . '. Payment is awaiting approval.');
             redirect('sales.php');
         } catch (RuntimeException $e) {
@@ -425,6 +425,8 @@ if ($sales) {
             'name' => $item['name'],
             'sku' => $item['sku'],
             'quantity' => (int) $item['quantity'],
+            'quantity_label' => product_quantity_label($item['name'], (int) $item['quantity']),
+            'is_nail' => is_nail_product($item['name']),
             'unit_price' => (float) $item['unit_price'],
             'subtotal' => (float) $item['subtotal'],
         ];
@@ -688,7 +690,7 @@ require __DIR__ . '/includes/header.php';
         <div class="col-12">
           <div class="sales-edit-items">
         <div class="sales-edit-items-heading"><span><i class="bi bi-basket2"></i>Receipt items</span><small id="editSaleItemCount"></small></div>
-            <div class="table-responsive"><table class="table mb-0"><thead><tr><th>Item</th><th class="text-center">Pieces</th><th class="text-end">Price per piece</th><th class="text-end">Line total</th></tr></thead><tbody id="editSaleItemsBody"></tbody></table></div>
+            <div class="table-responsive"><table class="table mb-0"><thead><tr><th>Item</th><th class="text-center">Quantity</th><th class="text-end">Price per base unit</th><th class="text-end">Line total</th></tr></thead><tbody id="editSaleItemsBody"></tbody></table></div>
             <div class="sales-edit-items-empty" id="editSaleItemsEmpty">No item details are available for this receipt.</div>
           </div>
         </div>
@@ -704,7 +706,7 @@ require __DIR__ . '/includes/header.php';
 <?php
 $extraScripts = '<script>
   const saleProducts = ' . json_encode(array_map(static function ($product) {
-        return ['id' => (int) $product['id'], 'name' => $product['name'], 'sku' => $product['sku'], 'price' => (float) $product['unit_price'], 'dimensional_conversion' => product_conversion_note($product['name'])];
+        return ['id' => (int) $product['id'], 'name' => $product['name'], 'sku' => $product['sku'], 'price' => (float) $product['unit_price'], 'dimensional_conversion' => product_conversion_note($product['name']), 'is_nail' => is_nail_product($product['name'])];
     }, $products), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';
   const currencySymbol = ' . json_encode(CURRENCY_SYMBOL, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';
   const saleItemsBody = document.getElementById("saleItemsBody");
@@ -742,12 +744,12 @@ $extraScripts = '<script>
       const itemCount = document.getElementById("editSaleItemCount");
       itemsBody.innerHTML = items.map(function (item) {
         return "<tr><td><strong>" + escapeHtml(item.name) + "</strong><small>" + escapeHtml(item.sku) + "</small></td>" +
-          "<td class=\"text-center\">" + Number(item.quantity) + " pieces</td>" +
+          "<td class=\"text-center\">" + escapeHtml(item.quantity_label || (Number(item.quantity) + " units")) + "</td>" +
           "<td class=\"text-end\">" + currencySymbol + Number(item.unit_price).toFixed(2) + "</td>" +
           "<td class=\"text-end fw-semibold\">" + currencySymbol + Number(item.subtotal).toFixed(2) + "</td></tr>";
       }).join("");
       const totalUnits = items.reduce(function (sum, item) { return sum + Number(item.quantity || 0); }, 0);
-      itemCount.textContent = items.length + (items.length === 1 ? " product" : " products") + " · " + totalUnits + (totalUnits === 1 ? " piece" : " pieces");
+      itemCount.textContent = items.length + (items.length === 1 ? " product" : " products") + " · " + totalUnits + (totalUnits === 1 ? " base unit" : " base units");
       itemsEmpty.style.display = items.length ? "none" : "block";
     });
   }
@@ -761,6 +763,11 @@ $extraScripts = '<script>
   function rowSubtotal(row) {
     const price = parseFloat(row.getAttribute("data-price")) || 0;
     const quantityInput = row.querySelector("input[name=\"quantity[]\"]");
+    if (row.dataset.isNail === "1") {
+      const boxes = Math.max(parseInt(row.querySelector(".sale-nail-boxes").value, 10) || 0, 0);
+      const pounds = Math.max(parseInt(row.querySelector(".sale-nail-pounds").value, 10) || 0, 0);
+      quantityInput.value = (boxes * 7) + pounds;
+    }
     const quantity = parseInt(quantityInput.value, 10) || 0;
     const subtotal = price * quantity;
     row.querySelector(".sale-line-total").textContent = currencySymbol + subtotal.toFixed(2);
@@ -790,7 +797,12 @@ $extraScripts = '<script>
     const existing = saleItemsBody.querySelector("tr[data-product-id=\"" + product.id + "\"]");
     if (existing) {
       const quantityInput = existing.querySelector("input[name=\"quantity[]\"]");
-      quantityInput.value = (parseInt(quantityInput.value, 10) || 0) + 1;
+      const nextQuantity = (parseInt(quantityInput.value, 10) || 0) + 1;
+      quantityInput.value = nextQuantity;
+      if (existing.dataset.isNail === "1") {
+        existing.querySelector(".sale-nail-boxes").value = Math.floor(nextQuantity / 7);
+        existing.querySelector(".sale-nail-pounds").value = nextQuantity % 7;
+      }
       recalcGrandTotal();
       return;
     }
@@ -798,14 +810,18 @@ $extraScripts = '<script>
     const row = document.createElement("tr");
     row.setAttribute("data-product-id", product.id);
     row.setAttribute("data-price", product.price);
+    row.dataset.isNail = product.is_nail ? "1" : "0";
+    const quantityControl = product.is_nail
+      ? "<input type=\"hidden\" name=\"quantity[]\" value=\"1\"><div class=\"d-flex gap-1\"><div><input type=\"number\" class=\"form-control sales-quantity-input sale-nail-boxes\" min=\"0\" value=\"0\" required><small>boxes</small></div><div><input type=\"number\" class=\"form-control sales-quantity-input sale-nail-pounds\" min=\"0\" max=\"6\" value=\"1\" required><small>extra lb</small></div></div>"
+      : "<input type=\"number\" class=\"form-control sales-quantity-input\" name=\"quantity[]\" min=\"1\" value=\"1\" required>";
     row.innerHTML =
-      "<td><div class=\"sales-cart-product\"><strong>" + escapeHtml(product.name) + "</strong><small>" + escapeHtml(product.sku) + " · " + currencySymbol + product.price.toFixed(2) + " per piece" + (product.dimensional_conversion ? " · " + escapeHtml(product.dimensional_conversion) : "") + "</small></div>" +
+      "<td><div class=\"sales-cart-product\"><strong>" + escapeHtml(product.name) + "</strong><small>" + escapeHtml(product.sku) + " · " + currencySymbol + product.price.toFixed(2) + (product.is_nail ? " per pound" : " per piece") + (product.dimensional_conversion ? " · " + escapeHtml(product.dimensional_conversion) : "") + "</small></div>" +
       "<input type=\"hidden\" name=\"product_id[]\" value=\"" + product.id + "\"></td>" +
-      "<td><input type=\"number\" class=\"form-control sales-quantity-input\" name=\"quantity[]\" min=\"1\" value=\"1\" required></td>" +
+      "<td>" + quantityControl + "</td>" +
       "<td class=\"sale-line-total text-end\">" + currencySymbol + "0.00</td>" +
       "<td class=\"text-end\"><button type=\"button\" class=\"btn remove-sale-item\" title=\"Remove\"><i class=\"bi bi-x-lg\"></i></button></td>";
     saleItemsBody.appendChild(row);
-    row.querySelector("input[name=\"quantity[]\"]").addEventListener("input", recalcGrandTotal);
+    row.querySelectorAll("input").forEach(function (input) { input.addEventListener("input", recalcGrandTotal); });
     row.querySelector(".remove-sale-item").addEventListener("click", function () { row.remove(); recalcGrandTotal(); });
     recalcGrandTotal();
   }
@@ -829,7 +845,7 @@ $extraScripts = '<script>
     saleProductResults.innerHTML = matches.map(function (product) {
       return "<button type=\"button\" class=\"sale-search-result\" data-id=\"" + product.id + "\">" +
         "<span><strong>" + escapeHtml(product.name) + "</strong><small>" + escapeHtml(product.sku) + "</small></span>" +
-        "<b>" + currencySymbol + product.price.toFixed(2) + "</b></button>";
+        "<b>" + currencySymbol + product.price.toFixed(2) + (product.is_nail ? " / lb" : " / piece") + "</b></button>";
     }).join("");
     saleProductResults.style.display = "block";
     saleProductResults.querySelectorAll(".sale-search-result").forEach(function (button) {

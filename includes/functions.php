@@ -95,6 +95,22 @@ function is_louvre_frame(?string $productName): bool
     return (bool) preg_match('/\blouvre\s+frame\b/iu', trim($productName ?? ''));
 }
 
+/** Nail inventory is stored and priced in pounds; seven pounds make one box. */
+function is_nail_product(?string $productName): bool
+{
+    return (bool) preg_match('/\bnails?\b/iu', trim($productName ?? ''));
+}
+
+/** Convert validated nail stock fields into the total pounds stored in inventory. */
+function nail_total_pounds(mixed $boxes, mixed $extraPounds): ?int
+{
+    if (filter_var($boxes, FILTER_VALIDATE_INT) === false || filter_var($extraPounds, FILTER_VALIDATE_INT) === false) return null;
+    $boxes = (int) $boxes;
+    $extraPounds = (int) $extraPounds;
+    if ($boxes < 0 || $extraPounds < 0 || $extraPounds > 6) return null;
+    return ($boxes * 7) + $extraPounds;
+}
+
 /** Return the scaled dimensional equivalents for supported products. */
 function product_dimensional_equivalence(?string $productName, int $pieces): ?string
 {
@@ -129,12 +145,14 @@ function has_product_dimensional_conversion(?string $productName): bool
     return product_dimensional_equivalence($productName, 1) !== null
         || is_roofing_sheet($productName)
         || louvre_glass_box_size($productName) !== null
-        || is_louvre_frame($productName);
+        || is_louvre_frame($productName)
+        || is_nail_product($productName);
 }
 
 /** Return the short conversion note shown when a supported product is selected. */
 function product_conversion_note(?string $productName): ?string
 {
+    if (is_nail_product($productName)) return '7 pounds = 1 box';
     if (is_roofing_sheet($productName)) return '20 pieces = 1 bundle';
     $boxSize = louvre_glass_box_size($productName);
     if ($boxSize !== null) return number_format($boxSize) . ' pieces = 1 box';
@@ -143,9 +161,19 @@ function product_conversion_note(?string $productName): ?string
     return $equivalence !== null ? '1 piece = ' . $equivalence : null;
 }
 
-/** Format a product quantity while retaining the exact underlying piece count. */
+/** Format a product quantity while retaining its exact underlying base-unit count. */
 function product_quantity_label(?string $productName, int $pieces, bool $showExactPieces = true): string
 {
+    if (is_nail_product($productName)) {
+        $poundLabel = number_format($pieces) . ' ' . ($pieces === 1 ? 'pound' : 'pounds');
+        if ($pieces < 7) return $poundLabel;
+        $boxes = intdiv($pieces, 7);
+        $remainder = $pieces % 7;
+        $boxLabel = number_format($boxes) . ' ' . ($boxes === 1 ? 'box' : 'boxes');
+        if ($remainder > 0) $boxLabel .= ' + ' . number_format($remainder) . ' ' . ($remainder === 1 ? 'pound' : 'pounds');
+        return $showExactPieces ? $boxLabel . ' (' . $poundLabel . ')' : $boxLabel;
+    }
+
     $pieceLabel = number_format($pieces) . ' ' . ($pieces === 1 ? 'piece' : 'pieces');
     $equivalence = product_dimensional_equivalence($productName, $pieces);
     if ($equivalence !== null) {

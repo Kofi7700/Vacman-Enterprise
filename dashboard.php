@@ -266,7 +266,7 @@ require __DIR__ . '/includes/header.php';
           <td><span class="product-category <?= category_css_class($item['category']) ?>"><?= e($item['category']) ?></span></td>
           <td><i class="bi bi-shop me-2 text-muted"></i><?= e($item['store_name']) ?></td>
           <td><span class="dashboard-stock-count"><?= e(product_quantity_label($item['name'], (int) $item['quantity'])) ?></span></td>
-          <td><?= (int) $item['reorder_level'] ?> pieces</td>
+          <td><?= e(product_quantity_label($item['name'], (int) $item['reorder_level'])) ?></td>
           <td class="text-end"><a href="purchases.php?product_id=<?= (int) $item['id'] ?>" class="btn dashboard-reorder-button">Reorder <i class="bi bi-arrow-right ms-1"></i></a></td>
         </tr>
         <?php endforeach; endif; ?>
@@ -363,7 +363,7 @@ $extraScripts = '<script>
             backgroundColor: "#17351d",
             padding: 12,
             displayColors: false,
-            callbacks: { label: (context) => context.parsed.y + " pieces" }
+            callbacks: { label: (context) => context.parsed.y + " units" }
           }
         },
         scales: {
@@ -400,7 +400,7 @@ $extraScripts = '<script>
                 const total = context.dataset.data.reduce((sum, value) => sum + Number(value), 0);
                 const value = Number(context.raw);
                 const percent = total > 0 ? ((value / total) * 100).toFixed(1) : "0.0";
-                return context.label + ": " + value + " pieces (" + percent + "%)";
+                return context.label + ": " + value + " units (" + percent + "%)";
               }
             }
           }

@@ -1,144 +1,134 @@
 # Vacman Enterprise
 
-Vacman Enterprise is a server-rendered inventory and sales management system for **Yellowman Ventures**. It is built with PHP, MySQL, Bootstrap, and Chart.js, and is designed to run locally with XAMPP or in a Docker-based deployment.
+Vacman Enterprise is a PHP and MySQL inventory, sales, and store-management system built for **Yellowman Ventures**. It supports local development with XAMPP and production hosting on Hostinger.
 
-## Features
+## Main features
 
-- Dashboard with bar-and-pie inventory-mix charts, sales, stock, activity, and role-scoped daily machine-fee summaries
-- Product catalog with automatic product codes, category assignment, per-store stock editing, store grouping, and product/category/store filtering
-- Store-grouped inventory tracking with physical-count adjustments, role-based store visibility, and empty inventory for newly created stores until products are explicitly assigned
-- Product-specific timber conversions; 20-piece roofing-sheet bundles; louvre-glass boxes of 40 pieces for 24-inch, 32 pieces for 30-inch, and 27 pieces for 36-inch glass; and 10-piece boxes for all louvre frames
-- Multi-item sales checkout with VAT, discount and payment balance calculations, printable receipts, and audited receipt corrections for managers and administrators
-- Store-grouped transaction history showing the latest five transactions per store each day
-- Administrator-only sale deletion with automatic inventory restoration and audit logging
-- Multi-service fee registration for Sawing, Planning, Design, Shooting, and Facial Board, with printable receipts for administrators, managers, and cashiers
-- Customer deposit orders with item lists, instalment payments, and inventory deduction only when items are collected
-- Attendance for all active team members except administrators and managers, including system users and non-login staff
-- Purchase-order creation, cancellation, and stock receiving
-- Inter-store transfer workflow
-- Store and user management with required operating-store assignments and a searchable administrator audit trail showing 20 events per page
-- Sales, inventory, and low-stock reports with CSV export
-- Multi-role access control allowing each account to combine administrator, manager, mini-manager, cashier, warehouse, and sales-clerk permissions
-- CSRF protection, prepared SQL statements, password hashing, and audit logging
-- Responsive navigation with a menu button that toggles the sidebar on desktop and mobile
+- Product catalog and inventory grouped by store
+- Sales, deposits, purchases, transfers, receipts, and CSV reports
+- Physical stock counts and low-stock monitoring
+- Machine-fee collection and staff attendance
+- Store and user administration with audit logging
+- Multiple roles per account: administrator, manager, mini manager, cashier, warehouse, and sales clerk
+- Store-scoped access for staff; administrators and managers have broader access
+- Shared MySQL session storage for multi-instance deployments
+- CSRF protection, password hashing, prepared statements, and transactional stock updates
+
+New stores start with empty inventory. Products are assigned only when an authorized user explicitly adds them to a store.
+
+## Product conversion rules
+
+Conversions are product-based and apply automatically in every store where the matching product is assigned.
+
+### Timber
+
+- `2*6 Essa`: 1 piece = 3 × `2*2 Essa`, or 1 × `2*2 Essa` + 1 × `2*4 Essa`
+- `2*8 Wood B/C`: 1 piece = 4 × `2*2 Wood B/C`, 2 × `2*2 Wood B/C` + 1 × `2*4 Wood B/C`, or 2 × `2*4 Wood B/C`
+- `2*8 Otie`: 1 piece = 4 × `2*2 Otie`, 2 × `2*2 Otie` + 1 × `2*4 Otie`, or 2 × `2*4 Otie`
+- `2*8 Ceiba`: 1 piece = 2 × `2*4 Ceiba`
+
+### Roofing sheets
+
+Products containing `Sheet` or `Alluzinc` use 20 pieces per bundle. Incomplete bundles display the remaining pieces, such as `2 bundles + 5 pieces` for 45 pieces.
+
+This rule does not apply to roofing nails, roofing plaster, rain gutters, ridge cups, or valley gutters.
+
+### Louvre products
+
+- 24-inch louvre glass: 40 pieces per box
+- 30-inch louvre glass: 32 pieces per box
+- 36-inch louvre glass: 27 pieces per box
+- All louvre frames: 10 pieces per box
+
+### Nails
+
+Products containing `Nail` or `Nails` are stocked, purchased, sold, transferred, priced, and reported in pounds.
+
+- 7 pounds = 1 box
+- Total pounds = `(boxes × 7) + extra pounds`
+- Extra pounds must be from 0 through 6
+- Example: 5 boxes + 3 pounds records 38 pounds
+- 38 pounds display as `5 boxes + 3 pounds (38 pounds)`
+
+Existing nail quantities are interpreted as pounds and are not automatically multiplied. Products that match none of these rules use standard piece-based quantities.
 
 ## Requirements
 
-- PHP 8.2 or later with PDO MySQL enabled
+- PHP 8.2 or later with PDO MySQL
 - MySQL or MariaDB
-- Apache with `mod_rewrite` and `.htaccess` overrides enabled
+- Apache or an Apache-compatible server with `.htaccess` support
 - A modern web browser
 
-The standard XAMPP installation includes the required local services and PHP extensions.
+## Local setup
 
-## Local setup with XAMPP
+1. Place the project in `C:\xampp\htdocs\vacman`.
+2. Start Apache and MySQL in XAMPP.
+3. Import `config/database.sql` through phpMyAdmin.
+4. Open [http://localhost/vacman/](http://localhost/vacman/).
+5. Sign in with an administrator account provisioned for the environment.
 
-1. Place this repository at `C:\xampp\htdocs\vacman` on Windows. Typical alternatives are `/Applications/XAMPP/htdocs/vacman` on macOS and `/opt/lampp/htdocs/vacman` on Linux.
-2. Start Apache and MySQL from the XAMPP control panel.
-3. Open [phpMyAdmin](http://localhost/phpmyadmin), select **Import**, and import `config/database.sql`.
-4. Visit [http://localhost/vacman/](http://localhost/vacman/).
-5. Sign in with a demo account and change its password from the Profile page.
-
-The SQL import creates the `vacman_enterprise_system` database, its tables, and sample data. You do not need to create the database first.
-
-### Demo accounts
-
-| Username | Password | Role |
-| --- | --- | --- |
-| `admin` | `Admin@123` | Administrator |
-| `manager1` | `Manager@123` | Manager |
-| `minimanager1` | `MiniManager@123` | Mini manager (Store 2) |
-| `cashier1` | `Cashier@123` | Cashier |
-| `warehouse1` | `Warehouse@123` | Warehouse |
-| `clerk1` | `Clerk@123` | Sales clerk |
-
-> The demo passwords are public and must be changed before the application is exposed to other users.
+Do not publish usernames or passwords in source control or documentation.
 
 ## Configuration
 
-Application settings live in `config/config.php`. Database settings can be supplied as environment variables; when they are absent, the application uses the local XAMPP defaults shown below.
+Settings are read from environment variables and fall back to local XAMPP defaults.
 
-| Variable | Local default | Description |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| `DB_HOST` | `localhost` | MySQL host, optionally including a port |
+| `DB_HOST` | `localhost` | Database hostname |
+| `DB_PORT` | `3306` | Database port |
 | `DB_NAME` | `vacman_enterprise_system` | Database name |
 | `DB_USER` | `root` | Database user |
 | `DB_PASS` | Empty | Database password |
-| `APP_DEBUG` | `true` | Displays PHP errors during local development |
+| `DB_SSL` | `false` | Enable database TLS |
+| `DB_SSL_VERIFY_SERVER_CERT` | `true` | Verify the database certificate |
+| `DB_SSL_CA` | Empty | CA certificate path |
+| `DB_SSL_CA_BASE64` | Empty | Base64-encoded CA certificate |
+| `APP_DEBUG` | `true` | Display development errors |
+| `SESSION_LIFETIME` | `28800` | Session lifetime in seconds |
 
-Set `APP_DEBUG=false` in production. Errors are still written to the PHP error log.
+The application timezone is `Africa/Accra`. Set `APP_DEBUG=false` in production. Authentication and CSRF sessions are stored in the MySQL `app_sessions` table.
 
-If Apache ignores `.htaccess`, confirm that `AllowOverride All` is enabled for the document root. When the app is hosted below the web root (for example, at `/vacman/`), prefix the `RedirectMatch` and `ErrorDocument` paths in `.htaccess` with `/vacman` so the protected directories and custom error pages resolve correctly.
+## Access summary
 
-## Roles and access
+- Administrators manage all areas, users, deletions, and the audit trail.
+- Managers have broad store access but cannot perform administrator-only actions.
+- Mini managers, cashiers, warehouse staff, and sales clerks are restricted to their assigned store where applicable.
+- Warehouse staff manage products, stock, purchases, and transfer fulfillment.
+- Sales staff record sales; managers and administrators approve protected workflows such as deposit collection.
+- Accounts can hold multiple roles, and their permissions are combined.
 
-| Area | Access |
-| --- | --- |
-| Dashboard and reports | All signed-in users |
-| Products | Administrators and managers can view all stores; every other login role sees only products assigned to its store. Administrators and warehouse staff can add or edit; warehouse actions are restricted to their assigned store. Only administrators can delete |
-| Inventory | Administrators and managers can view all stores; every other login role sees only its assigned store. Administrators and warehouse staff can adjust stock; warehouse adjustments are restricted to their assigned store |
-| Sales | Administrators, managers, mini managers, cashiers, and sales clerks can access the sales page; warehouse-only users cannot. Administrators, managers, mini managers, and sales clerks can record sales. Only administrators can delete sales |
-| Machine fees | Administrators and managers can register and view payments across all stores; cashiers can register and view payments only for their assigned store. Only administrators can delete payments |
-| Deposits | Customer item orders can be partly or fully paid without changing inventory. Only administrators and managers can approve collection; stock is validated and deducted only after that approval. Store-assigned users are restricted to their store |
-| Attendance | Includes mini managers, cashiers, warehouse users, sales clerks, and non-login staff. Administrators and managers mark across stores; mini managers mark only their assigned store |
-| Purchases | Administrators and managers can view all stores. Mini managers and warehouse staff are restricted to their assigned store |
-| Transfers | Administrators and managers can view all stores. Mini managers and warehouse staff see only transfers involving their assigned store and can request stock only from that store |
-| Stores | Administrators and managers; only administrators can delete |
-| User administration and audit trail | Administrators only; the audit trail shows the newest 20 events per page |
-| Profile | All signed-in users |
+## Hostinger deployment
 
-Accounts may hold more than one role. Permissions are combined: if any assigned role grants an action, the account can perform it. A store assignment is required whenever an account includes mini-manager, cashier, warehouse, or sales-clerk responsibilities.
+1. Create a custom PHP/HTML website in hPanel.
+2. Select PHP 8.2 or later and confirm PDO MySQL is enabled.
+3. Upload the project contents directly into `public_html` so `index.php` and `.htaccess` are at its root.
+4. Initialize the database locally with `config/database.sql`, then export the completed database from phpMyAdmin.
+5. Remove `CREATE DATABASE`, `DROP DATABASE`, `USE`, `DEFINER`, `PROCEDURE`, `FUNCTION`, `TRIGGER`, and privilege statements from the deployment export.
+6. Create a Hostinger MySQL database and import the cleaned export through phpMyAdmin.
+7. Configure the exact `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASS` values shown in hPanel.
+8. Set `APP_DEBUG=false`. Enable database TLS only when required by the database provider.
+9. Enable SSL, force HTTPS, verify login and permissions, and test stock-related workflows before entering live data.
 
-## Project structure
+The development `config/database.sql` contains local database-creation and migration procedures and should not be imported unchanged into Hostinger shared hosting.
 
-```text
-vacman/
-|-- assets/              # CSS, JavaScript, images, and user uploads
-|-- config/
-|   |-- config.php       # Application and database configuration
-|   `-- database.sql     # Schema and seed data
-|-- errors/              # Custom HTTP error pages
-|-- includes/            # Authentication, database, CSRF, layout, and helpers
-|-- admin.php            # User administration and audit log
-|-- dashboard.php        # KPIs, alerts, charts, and recent activity
-|-- inventory.php        # Per-store stock and physical counts
-|-- machine_fees.php     # Machine fee registration and history
-|-- machine_fee_receipt.php # Printable machine fee receipt
-|-- deposits.php         # Customer deposit orders and collection
-|-- deposit_receipt.php  # Printable partial/full deposit receipt
-|-- attendance.php       # Staff clock-in/out and attendance register
-|-- products.php         # Store-grouped product catalog
-|-- purchases.php        # Purchase orders and receiving
-|-- receipt.php          # Store-protected printable sale receipt
-|-- reports.php          # Operational reports and CSV export
-|-- sales.php            # Checkout and store-grouped sales history
-|-- stores.php           # Store management
-`-- transfers.php        # Inter-store transfers
-```
+Hostinger references:
 
-## Docker and Render deployment
+- [Upload a PHP website](https://www.hostinger.com/support/how-to-upload-a-website-from-backups/)
+- [Prepare and import a database](https://www.hostinger.com/support/1864324-how-to-upload-and-set-up-your-database-at-hostinger/)
+- [Change the PHP version](https://www.hostinger.com/support/1575755-how-to-change-the-php-version-of-your-hostinger-hosting-plan/)
+- [Enable HTTPS](https://www.hostinger.com/support/1583201-how-to-enable-or-disable-https-for-your-website/)
 
-The included `Dockerfile` runs PHP 8.2 with Apache on port `10000`. The database must run as a separate MySQL service.
+## Security
 
-1. Push this directory as the root of a Git repository.
-2. Provision a MySQL instance and import `config/database.sql`.
-3. Create a Render Web Service using the repository's Dockerfile.
-4. Configure `DB_HOST`, `DB_NAME`, `DB_USER`, `DB_PASS`, and `APP_DEBUG=false`.
-5. Deploy the service. The container exposes port `10000`.
-
-Render does not provide a native PHP runtime or managed MySQL. PHP runs through Docker, and MySQL can be deployed as a private service with persistent storage. See Render's [Docker](https://render.com/docs/docker) and [MySQL](https://render.com/docs/deploy-mysql) documentation for current platform instructions.
-
-## Security notes
-
-- All application pages require authentication or an explicit role.
-- State-changing requests use CSRF tokens.
-- SQL queries use PDO prepared statements.
-- Sales and stock movements use database transactions and row locking.
-- Destructive actions use CSRF-protected `POST` requests rather than query-string actions.
-- Production deployments should use HTTPS, unique database credentials, changed demo passwords, and `APP_DEBUG=false`.
+- Keep production credentials outside the repository.
+- Use HTTPS and unique account/database passwords.
+- Keep database certificate verification enabled when TLS is used.
+- Keep `APP_DEBUG=false` in production.
+- Back up the application and database after deployment and before major changes.
 
 ## Current limitations
 
-- The notifications table has no email, SMS, or in-app notification interface.
 - Currency is fixed to Ghanaian cedi (`GHS`).
-- Sales history is capped at 100 records and displays at most five transactions per store per day; purchase and transfer lists are also capped rather than paginated.
+- Notifications do not yet have an email, SMS, or in-app interface.
+- Sales history is capped at 100 records; purchase and transfer lists are also capped rather than paginated.

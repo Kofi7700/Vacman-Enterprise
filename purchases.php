@@ -16,15 +16,26 @@ if (is_post() && isset($_POST['add_purchase'])) {
         'product_id' => 'required|int',
         'store_id' => 'required|int',
         'supplier_name' => 'required',
-        'quantity' => 'required|int|positive',
         'unit_cost' => 'required|numeric|positive',
         'purchase_date' => 'required',
     ]);
 
-    $quantity = (int) ($_POST['quantity'] ?? 0);
+    $productId = (int) ($_POST['product_id'] ?? 0);
+    $productStmt = $pdo->prepare('SELECT id, name FROM products WHERE id = ? AND status = "active"');
+    $productStmt->execute([$productId]);
+    $purchaseProduct = $productStmt->fetch();
+    if (!$purchaseProduct) $errors[] = 'Select an active product.';
+    if ($purchaseProduct && is_nail_product($purchaseProduct['name'])) {
+        $quantity = nail_total_pounds($_POST['quantity_boxes'] ?? null, $_POST['quantity_pounds'] ?? null);
+        if ($quantity === null) $errors[] = 'Enter valid nail quantity: non-negative boxes and 0 to 6 extra pounds.';
+    } else {
+        $rawQuantity = $_POST['quantity'] ?? null;
+        $quantity = filter_var($rawQuantity, FILTER_VALIDATE_INT) !== false && (int) $rawQuantity >= 1 ? (int) $rawQuantity : null;
+        if ($quantity === null) $errors[] = 'Quantity must be at least 1.';
+    }
     $unitCost = (float) ($_POST['unit_cost'] ?? 0);
-    if ($quantity < 1) $errors[] = 'Quantity must be at least 1.';
-    if ($unitCost <= 0) $errors[] = 'Cost per piece must be greater than 0.';
+    if ($quantity !== null && $quantity < 1) $errors[] = 'Quantity must be at least 1.';
+    if ($unitCost <= 0) $errors[] = 'Cost per base unit must be greater than 0.';
     if (!$canViewAllStores && ($assignedStoreId <= 0 || (int) ($_POST['store_id'] ?? 0) !== $assignedStoreId)) $errors[] = 'You can create purchase orders only for your assigned store.';
     if (!$canViewAllStores && $assignedStoreId > 0 && (int) ($_POST['product_id'] ?? 0) > 0) {
         $availableStmt = $pdo->prepare('SELECT COUNT(*) FROM inventory WHERE product_id = ? AND store_id = ?');
@@ -39,7 +50,7 @@ if (is_post() && isset($_POST['add_purchase'])) {
                  VALUES (:product_id, :store_id, :supplier_name, :po_number, :quantity, :unit_cost, :total_cost, :purchase_date, :expected_date, :notes)'
             );
             $stmt->execute([
-                ':product_id' => (int) $_POST['product_id'],
+                ':product_id' => $productId,
                 ':store_id' => (int) $_POST['store_id'],
                 ':supplier_name' => trim($_POST['supplier_name']),
                 ':po_number' => trim($_POST['purchase_order_number'] ?? '') ?: ('PO-' . date('Ymd-His')),
@@ -52,7 +63,7 @@ if (is_post() && isset($_POST['add_purchase'])) {
             ]);
             $purchaseId = (int) $pdo->lastInsertId();
             log_audit('create', 'purchase', $purchaseId, null, [
-                'product_id' => (int) $_POST['product_id'],
+                'product_id' => $productId,
                 'store_id' => (int) $_POST['store_id'],
                 'quantity' => $quantity,
                 'total_cost' => $unitCost * $quantity,
@@ -79,7 +90,7 @@ if (is_post() && isset($_POST['mark_delivered'])) {
     try {
         $pdo->beginTransaction();
 
-        $purchaseStmt = $pdo->prepare('SELECT * FROM purchases WHERE id = ? FOR UPDATE');
+        $purchaseStmt = $pdo->prepare('SELECT pu.*, p.name AS product_name FROM purchases pu JOIN products p ON p.id = pu.product_id WHERE pu.id = ? FOR UPDATE');
         $purchaseStmt->execute([$purchaseId]);
         $purchase = $purchaseStmt->fetch();
 
@@ -111,7 +122,7 @@ if (is_post() && isset($_POST['mark_delivered'])) {
 
         $pdo->commit();
         log_audit('status_change', 'purchase', $purchaseId, ['status' => 'ordered'], ['status' => 'delivered']);
-        flash_set('success', number_format((int) $purchase['quantity']) . ' pieces received and added to inventory.');
+        flash_set('success', product_quantity_label($purchase['product_name'] ?? null, (int) $purchase['quantity']) . ' received and added to inventory.');
     } catch (RuntimeException $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         flash_set('warning', $e->getMessage());
@@ -319,8 +330,13 @@ require __DIR__ . '/includes/header.php';
             <div class="col-md-6"><label class="form-label">Deliver to store</label><select class="form-select" name="store_id" required><?php foreach ($stores as $store): ?><option value="<?= (int) $store['id'] ?>"><?= e($store['name']) ?></option><?php endforeach; ?></select></div>
             <div class="col-md-6"><label class="form-label">Supplier</label><input type="text" class="form-control" name="supplier_name" placeholder="Supplier or distributor" required></div>
             <div class="col-md-6"><label class="form-label">PO number <span class="text-muted fw-normal">(optional)</span></label><input type="text" class="form-control" name="purchase_order_number" placeholder="Generated automatically if blank"></div>
-            <div class="col-md-6"><label class="form-label">Quantity (pieces)</label><input type="number" class="form-control" id="purchaseQuantity" name="quantity" min="1" required><div class="form-text">Timber, roofing-sheet bundle, and louvre glass/frame box conversions apply automatically.</div></div>
-            <div class="col-md-6"><label class="form-label">Cost per piece (<?= e(CURRENCY_SYMBOL) ?>)</label><input type="number" class="form-control" id="purchaseUnitCost" name="unit_cost" step="0.01" min="0.01" required></div>
+            <div class="col-md-6">
+              <label class="form-label">Quantity</label>
+              <div id="purchaseStandardQuantity"><div class="input-group"><input type="number" class="form-control" id="purchaseQuantity" name="quantity" min="1" required><span class="input-group-text">pieces</span></div></div>
+              <div id="purchaseNailQuantity" class="row g-2 d-none"><div class="col-6"><div class="input-group"><input type="number" class="form-control" id="purchaseQuantityBoxes" name="quantity_boxes" min="0" value="0"><span class="input-group-text">boxes</span></div></div><div class="col-6"><div class="input-group"><input type="number" class="form-control" id="purchaseQuantityPounds" name="quantity_pounds" min="0" max="6" value="0"><span class="input-group-text">extra lb</span></div></div></div>
+              <div class="form-text" id="purchaseQuantityHelp">Timber, roofing-sheet bundle, and louvre glass/frame box conversions apply automatically.</div>
+            </div>
+            <div class="col-md-6"><label class="form-label">Cost per <span id="purchaseCostUnit">piece</span> (<?= e(CURRENCY_SYMBOL) ?>)</label><input type="number" class="form-control" id="purchaseUnitCost" name="unit_cost" step="0.01" min="0.01" required></div>
             <div class="col-md-6"><label class="form-label">Purchase date</label><input type="date" class="form-control" name="purchase_date" value="<?= date('Y-m-d') ?>" required></div>
             <div class="col-md-6"><label class="form-label">Expected delivery <span class="text-muted fw-normal">(optional)</span></label><input type="date" class="form-control" name="expected_delivery_date"></div>
             <div class="col-12"><label class="form-label">Notes <span class="text-muted fw-normal">(optional)</span></label><textarea class="form-control" name="notes" rows="3" placeholder="Delivery instructions or additional details"></textarea></div>
@@ -335,13 +351,19 @@ require __DIR__ . '/includes/header.php';
 <?php
 $extraScripts = '<script>
   const purchaseProducts = ' . json_encode(array_map(static function ($product) {
-        return ['id' => (int) $product['id'], 'name' => $product['name'], 'sku' => $product['sku']];
+        return ['id' => (int) $product['id'], 'name' => $product['name'], 'sku' => $product['sku'], 'is_nail' => is_nail_product($product['name'])];
     }, $products), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';
   const currencySymbol = ' . json_encode(CURRENCY_SYMBOL, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';
   const purchaseProductSearch = document.getElementById("purchaseProductSearch");
   const purchaseProductId = document.getElementById("purchaseProductId");
   const purchaseProductResults = document.getElementById("purchaseProductResults");
   const purchaseQuantity = document.getElementById("purchaseQuantity");
+  const purchaseQuantityBoxes = document.getElementById("purchaseQuantityBoxes");
+  const purchaseQuantityPounds = document.getElementById("purchaseQuantityPounds");
+  const purchaseStandardQuantity = document.getElementById("purchaseStandardQuantity");
+  const purchaseNailQuantity = document.getElementById("purchaseNailQuantity");
+  const purchaseQuantityHelp = document.getElementById("purchaseQuantityHelp");
+  const purchaseCostUnit = document.getElementById("purchaseCostUnit");
   const purchaseUnitCost = document.getElementById("purchaseUnitCost");
   const purchaseEstimatedTotal = document.getElementById("purchaseEstimatedTotal");
 
@@ -352,9 +374,24 @@ $extraScripts = '<script>
   }
 
   function updatePurchaseTotal() {
-    const quantity = parseInt(purchaseQuantity.value, 10) || 0;
+    const selected = purchaseProducts.find(function (product) { return String(product.id) === purchaseProductId.value; });
+    const quantity = selected && selected.is_nail
+      ? ((parseInt(purchaseQuantityBoxes.value, 10) || 0) * 7) + (parseInt(purchaseQuantityPounds.value, 10) || 0)
+      : (parseInt(purchaseQuantity.value, 10) || 0);
     const unitCost = parseFloat(purchaseUnitCost.value) || 0;
     purchaseEstimatedTotal.textContent = currencySymbol + (quantity * unitCost).toFixed(2);
+  }
+
+  function setPurchaseUnit(product) {
+    const isNail = Boolean(product && product.is_nail);
+    purchaseStandardQuantity.classList.toggle("d-none", isNail);
+    purchaseNailQuantity.classList.toggle("d-none", !isNail);
+    purchaseQuantity.required = !isNail;
+    purchaseQuantityBoxes.required = isNail;
+    purchaseQuantityPounds.required = isNail;
+    purchaseCostUnit.textContent = isNail ? "pound" : "piece";
+    purchaseQuantityHelp.textContent = isNail ? "Enter boxes and extra pounds. Seven pounds equal one box." : "Timber, roofing-sheet bundle, and louvre glass/frame box conversions apply automatically.";
+    updatePurchaseTotal();
   }
 
   function renderPurchaseResults(query) {
@@ -378,6 +415,7 @@ $extraScripts = '<script>
         if (product) {
           purchaseProductSearch.value = product.name + " (" + product.sku + ")";
           purchaseProductId.value = product.id;
+          setPurchaseUnit(product);
         }
         purchaseProductResults.style.display = "none";
         purchaseProductResults.innerHTML = "";
@@ -386,10 +424,12 @@ $extraScripts = '<script>
   }
 
   purchaseQuantity.addEventListener("input", updatePurchaseTotal);
+  purchaseQuantityBoxes.addEventListener("input", updatePurchaseTotal);
+  purchaseQuantityPounds.addEventListener("input", updatePurchaseTotal);
   purchaseUnitCost.addEventListener("input", updatePurchaseTotal);
 
   if (purchaseProductSearch) {
-    purchaseProductSearch.addEventListener("input", function () { purchaseProductId.value = ""; renderPurchaseResults(this.value); });
+    purchaseProductSearch.addEventListener("input", function () { purchaseProductId.value = ""; setPurchaseUnit(null); renderPurchaseResults(this.value); });
     purchaseProductSearch.addEventListener("focus", function () { this.select(); });
     purchaseProductSearch.addEventListener("keydown", function (event) {
       if (event.key === "Enter") { event.preventDefault(); const first = purchaseProductResults.querySelector(".purchase-search-result"); if (first) first.click(); }
@@ -404,7 +444,8 @@ $extraScripts = '<script>
     addPurchaseForm.addEventListener("submit", function (event) {
       if (!purchaseProductId.value) { event.preventDefault(); alert("Please search for and select a product from the list."); }
     });
-  }';
+  }
+  setPurchaseUnit(purchaseProducts.find(function (product) { return String(product.id) === purchaseProductId.value; }) || null);';
 
 if ($preselectProduct > 0 && $preselectProductLabel !== '') {
     $extraScripts .= 'document.addEventListener("DOMContentLoaded", function () { new bootstrap.Modal(document.getElementById("addPurchaseModal")).show(); });';
