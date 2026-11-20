@@ -16,42 +16,6 @@ Vacman Enterprise is a PHP and MySQL inventory, sales, and store-management syst
 
 New stores start with empty inventory. Products are assigned only when an authorized user explicitly adds them to a store.
 
-## Product conversion rules
-
-Conversions are product-based and apply automatically in every store where the matching product is assigned.
-
-### Timber
-
-- `2*6 Essa`: 1 piece = 3 × `2*2 Essa`, or 1 × `2*2 Essa` + 1 × `2*4 Essa`
-- `2*8 Wood B/C`: 1 piece = 4 × `2*2 Wood B/C`, 2 × `2*2 Wood B/C` + 1 × `2*4 Wood B/C`, or 2 × `2*4 Wood B/C`
-- `2*8 Otie`: 1 piece = 4 × `2*2 Otie`, 2 × `2*2 Otie` + 1 × `2*4 Otie`, or 2 × `2*4 Otie`
-- `2*8 Ceiba`: 1 piece = 2 × `2*4 Ceiba`
-
-### Roofing sheets
-
-Products containing `Sheet` or `Alluzinc` use 20 pieces per bundle. Incomplete bundles display the remaining pieces, such as `2 bundles + 5 pieces` for 45 pieces.
-
-This rule does not apply to roofing nails, roofing plaster, rain gutters, ridge cups, or valley gutters.
-
-### Louvre products
-
-- 24-inch louvre glass: 40 pieces per box
-- 30-inch louvre glass: 32 pieces per box
-- 36-inch louvre glass: 27 pieces per box
-- All louvre frames: 10 pieces per box
-
-### Nails
-
-Products containing `Nail` or `Nails` are stocked, purchased, sold, transferred, priced, and reported in pounds.
-
-- 7 pounds = 1 box
-- Total pounds = `(boxes × 7) + extra pounds`
-- Extra pounds must be from 0 through 6
-- Example: 5 boxes + 3 pounds records 38 pounds
-- 38 pounds display as `5 boxes + 3 pounds (38 pounds)`
-
-Existing nail quantities are interpreted as pounds and are not automatically multiplied. Products that match none of these rules use standard piece-based quantities.
-
 ## Requirements
 
 - PHP 8.2 or later with PDO MySQL
